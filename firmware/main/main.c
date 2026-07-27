@@ -12,6 +12,7 @@
 #include "provisioning.h"
 #include "splash.h"
 #include "lowbatt.h"
+#include "led.h"
 
 #include <time.h>
 #include <string.h>
@@ -53,6 +54,13 @@ void app_main(void) {
 
     ESP_ERROR_CHECK(config_init());
 
+    // One clean blink on every wake (timer or button): a screen-free "the frame
+    // woke and is working" pulse. A held button then adds the gesture progression
+    // in power_boot_gesture(). GPIO21 is a free LED now that the console is on
+    // USB-Serial-JTAG (see led.h / sdkconfig).
+    led_init();
+    led_ack();
+
     // Cold boot: RTC-retained button counter holds garbage from power-up.
     if (reason == ESP_RST_POWERON) s_button_event_seq = 0;
 
@@ -65,6 +73,16 @@ void app_main(void) {
     if (!want_provision) {
         char ssid[33], pass[65];
         want_provision = !config_get_wifi(ssid, sizeof ssid, pass, sizeof pass);
+    }
+    // A locked (flat) cell can't afford AP-mode radio for a whole setup session, and a brownout
+    // mid-provisioning would lose the creds. Refuse the deliberate 20 s re-provision gesture while
+    // locked -> show the charge splash instead. Guarded on the gesture only, so a genuinely
+    // unprovisioned device (no saved creds -> want_provision) still reaches setup: a fresh/reflashed
+    // device is never in the locked state (RTC lock clears on cold boot).
+    if (want_provision && gesture == BTN_GESTURE_PROVISION && lowbatt_locked()) {
+        ESP_LOGW(TAG, "provision gesture ignored: battery locked, charge first");
+        splash_show_lowbatt();
+        power_deep_sleep(lowbatt_wake_s());            // no return
     }
     if (want_provision) {
         splash_show_setup();                           // panel shows AP name/password while you provision
@@ -85,11 +103,13 @@ void app_main(void) {
 
     // Low-battery gate. Measure now: the button (shared with the battery ADC on GPIO2) has been
     // released by power_boot_gesture, so GPIO2 reads the cell cleanly — and it's still before
-    // WiFi/EPD load the rail. Below ~0% (3300 mV, bottom of the battpct.h curve) -> charge screen
-    // + low-power poll until the voltage rises
-    // (charging). A button-wake resumes NORMAL so the device is always recoverable.
+    // WiFi/EPD load the rail. At 0% (3400 mV, bottom of the battpct.h curve) -> charge screen
+    // + a daily low-power poll until the voltage recovers (charging). A button-wake resumes
+    // NORMAL so the device is always recoverable — and is the fast way back after plugging in.
     power_measure_battery();
-    switch (lowbatt_gate(power_battery_mv(), esp_sleep_get_wakeup_cause())) {
+    bool force_resume = want_refresh;              // a 3 s hold is the deliberate override when locked
+    bool was_locked   = lowbatt_locked();          // read before the gate mutates RTC state
+    switch (lowbatt_gate(power_battery_mv(), force_resume)) {
         case LOWBATT_ARM:
             ESP_LOGW(TAG, "battery low: charge screen + %lu s low-power poll",
                      (unsigned long)lowbatt_wake_s());
@@ -102,8 +122,14 @@ void app_main(void) {
             break;
         case LOWBATT_NORMAL:
         default:
-            break;   // healthy / recovered / button-wake -> normal cycle
+            break;   // healthy / recovered / override -> normal cycle
     }
+    // Just recovered from the locked state via an automatic route (a tap that charged, or the daily
+    // poll) — not a 3 s hold. The charge splash was painted outside the ETag machinery, so a plain
+    // re-fetch could return 304 and skip the paint, stranding the splash. Clear the ETag to force a
+    // 200 repaint of the live photo. A 3 s hold (want_refresh) is left alone: its refresh path
+    // already drops If-None-Match and pulls fresh content — identical to the good-battery gesture.
+    if (was_locked && !want_refresh) config_set_etag("");
 
     // One-shot after provisioning: paint the "waiting for first frame" splash and
     // clear the ETag so the first /frame returns 200 and the real photo repaints

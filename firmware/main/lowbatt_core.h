@@ -5,8 +5,9 @@
 // One decision per wake. Below ARM (after a short debounce streak) the device locks into a
 // low-power poll; while locked it stays low until the cell recovers — either absolutely
 // (>= CLEAR) or by climbing RISE mV above its lowest-seen baseline (a rising cell means a
-// charger is attached; the C3 has no VBUS line to sense that directly). A button or USB wake
-// is a deliberate "resume" and never gates. State is caller-owned (kept in RTC-RAM), so this
+// charger is attached; the C3 has no VBUS line to sense that directly). A force-resume (a
+// deliberate 3 s button hold) or a USB wake unlocks immediately; a plain tap is treated as an
+// ordinary evaluation wake. State is caller-owned (kept in RTC-RAM), so this
 // stays a pure function and is unit-testable on the host.
 #pragma once
 #include <stdint.h>
@@ -43,18 +44,22 @@ typedef struct {
 // Decide the action for this wake and the state to carry forward. Pure: no side effects.
 //   batt_mv     below LOWBATT_MIN_PLAUSIBLE_MV means an implausible read (ADC failure, no
 //               cell, button shorting the shared ADC pin) — never gate on garbage.
-//   button_wake this wake came from the button (a deliberate resume).
+//   force_resume deliberate override (a 3 s button hold): unlock now regardless of the reading.
 //   usb_present tethered to a data host (kept for callers that can detect it; false is fine).
 //   enabled     master switch; off -> always NORMAL, state untouched.
-static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool button_wake, bool usb_present,
+static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool force_resume, bool usb_present,
                                               bool enabled, lowbatt_state_t st, lowbatt_cfg_t cfg) {
     lowbatt_result_t r = { LOWBATT_NORMAL, st };
 
     if (!enabled) return r;                       // gate off -> behave exactly as before
 
-    if (button_wake || usb_present) {             // deliberate resume / tethered -> never gate
+    if (force_resume || usb_present) {            // deliberate override / tethered -> unlock now
+        bool was_locked = st.lock;
         r.next.lock = false;
-        r.next.low_streak = 0;
+        // Escaping a locked state: pre-load the debounce so a single still-low next read re-arms
+        // immediately, instead of rebuilding the streak across more full WiFi wakes. A genuine
+        // recovery resets this to 0 via the healthy-read branch below.
+        r.next.low_streak = (was_locked && cfg.arm_streak > 0) ? (uint8_t)(cfg.arm_streak - 1) : 0;
         if (batt_mv >= LOWBATT_MIN_PLAUSIBLE_MV) r.next.last_mv = (int16_t)batt_mv;
         return r;
     }

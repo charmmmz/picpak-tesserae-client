@@ -4,6 +4,7 @@ idf_component_register(
          "fb2bpp.c"
          "config_store.c"
          "power.c"
+         "led.c"
          "wifi_manager.c"
          "image_fetcher.c"
          "heartbeat.c"

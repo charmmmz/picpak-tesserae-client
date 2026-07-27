@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.8.0
+
+### Fixed
+- **Panel deep-sleep command completed** (`firmware/main/epd_driver.c`). `epd_sleep()`
+  issued a bare Deep Sleep opcode (`0x07`) with no parameter; this controller requires the
+  `0xA5` check-code byte to enter deep sleep (a built-in guard against an accidental sleep),
+  so a bare `0x07` is ignored and the panel stays in a higher-power standby between wakes. It
+  now sends `0x07, 0xA5` (and the `0x00` parameter with Power OFF `0x02`), matching the
+  controller's required framing, so the panel enters its proper low-power deep-sleep state
+  between wakes.
+
+### Added
+- **Status-LED feedback** (`firmware/main/led.c`, `led.h`, `power.c`, `main.c`). The on-board
+  LED (GPIO21) now gives screen-free status: **one blink on every wake** (timer or button) as a
+  "the frame woke and is working" pulse, and while you hold the button at wake a gesture
+  progression — off (`<3 s`) → **steady-on** (refresh armed at ~3 s) → **rapid burst**
+  (provisioning armed at ~20 s) — so you can feel how long you have held. LED is active-low.
+
+### Changed
+- **Console moved to USB-Serial-JTAG** (`firmware/sdkconfig.defaults`). GPIO21 is both the status
+  LED and the UART0 TX pin; with the console on UART0 the pin flickered with log traffic. The
+  console is now solely the native USB-Serial-JTAG — where the logs were already read (the
+  `/dev/cu.usbmodem*` port), so serial monitoring is unchanged — and UART0 no longer drives
+  GPIO21, leaving it a clean, dedicated LED.
+- `FW_VERSION` bumped `0.7.1` → `0.8.0`.
+
+## 0.7.1
+
+### Changed
+- **Low-battery gate retuned** (`firmware/main/lowbatt.h`). ARM raised **3300 → 3400 mV**
+  and CLEAR **3500 → 3550 mV**; the low-power poll goes **900 s → 86400 s** (daily).
+  ARM now sits exactly on the `battpct.h` floor, so the reported percentage hits 0
+  when the charge screen appears instead of after it, and the frame stops attempting
+  WiFi ~100 mV earlier — that band bought almost no runtime and was spent entirely in
+  the zone where a TX burst sags the rail into a brownout. The daily poll removes the
+  polling component of gated drain almost entirely (~0.1–0.5 mAh/day → negligible),
+  but **total** gated drain only falls by something like 1.5–2×, because what remains
+  is the deep-sleep floor, which the permanent battery-sense divider may well dominate.
+  The honest justification is that there is nothing useful to do more often than daily
+  once gated, not a dramatic power rescue. Hardware-observed firing on a real low cell.
+- **Physical button made battery-safe in the low-battery gate** (`lowbatt_core.h`,
+  `lowbatt.c`, `main.c`). Previously *any* button wake — including a quick tap —
+  force-resumed the gate to NORMAL, driving a WiFi fetch + repaint (the heaviest rail
+  load) on a nearly-dead cell, the exact brownout the gate exists to prevent. Now,
+  while the gate is **locked**:
+    - a **quick tap** only re-measures the battery — no radio — and resumes just if the
+      cell has genuinely recovered; otherwise it drops straight back to the low-power
+      poll (the persistent e-paper charge splash is already on screen, so nothing
+      repaints);
+    - a **~3 s hold** is a deliberate override that force-resumes and refreshes,
+      behaving identically to the good-battery button-refresh (pulls fresh content /
+      rotation + repaints) — the manual escape hatch if a reading is ever wrong;
+    - a still-low override **re-arms on the very next reading** (the debounce is
+      preloaded), so a force-resume on a truly flat cell costs exactly one fetch instead
+      of several. The `force_resume` semantic replaces `button_wake` in the FSM.
+  A tap is now the fast recovery path after plugging in, so the daily poll stays a rare
+  fallback.
+- **Provisioning refused on a flat cell.** The **20 s** re-provision hold is ignored
+  while the gate is locked (charge splash instead of the captive portal): AP-mode radio
+  for a whole setup session is sustained heavy load, and a brownout mid-setup would lose
+  the credentials. Guarded on the gesture, so first-time setup (no saved creds) is
+  unaffected — a fresh device is never in the locked state.
+- **Live photo repaints over the charge splash on recovery.** The charge splash is
+  painted outside the ETag machinery, so an automatic recovery (a tap that charged, or
+  the daily poll) could re-fetch, receive a `304 Not Modified`, skip the paint, and
+  leave the splash stranded on screen. The device now clears the stored ETag on an
+  automatic recovery to force a `200` repaint (REST). A 3 s hold already forces this via
+  its refresh path.
+- `FW_VERSION` bumped `0.7.0` → `0.7.1`.
+
 ## 0.7.0
 
 ### Added

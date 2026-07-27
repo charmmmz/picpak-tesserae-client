@@ -5,6 +5,7 @@
 #include "board.h"
 #include "defaults.h"
 #include "battpct.h"
+#include "led.h"
 
 #include <stdlib.h>   // qsort
 #include "driver/gpio.h"
@@ -85,21 +86,34 @@ bool power_button_held(void) {
 }
 
 btn_gesture_t power_boot_gesture(void) {
-    if (!power_button_held()) return BTN_GESTURE_NONE;
+    if (!power_button_held()) return BTN_GESTURE_NONE;   // timer wake, or a tap already released
+    // Button is held. The one-blink wake acknowledge already fired in app_main;
+    // add the hold progression as screen-free feedback of how long it is held:
+    // off (<3 s) -> steady on (refresh armed at 3 s) -> rapid burst (provisioning
+    // armed at 20 s).
     ESP_LOGW(TAG, "button held at boot: flash window %d ms (refresh at %d ms, provisioning at %d ms)",
              BOOT_HOLD_WINDOW_MS, BTN_REFRESH_HOLD_MS, PROVISION_HOLD_MS);
     int waited = 0;
+    bool refresh_armed = false;
     while (power_button_held()) {
         vTaskDelay(pdMS_TO_TICKS(200));
         waited += 200;
         if (waited >= PROVISION_HOLD_MS) {
+            // Provisioning armed: rapid confirm burst so the user can release now.
+            for (int i = 0; i < 6; i++) { led_set((i % 2) == 0); vTaskDelay(pdMS_TO_TICKS(60)); }
+            led_set(false);
             ESP_LOGW(TAG, "held %d ms -> entering provisioning", waited);
             return BTN_GESTURE_PROVISION;
+        }
+        if (!refresh_armed && waited >= BTN_REFRESH_HOLD_MS) {
+            refresh_armed = true;
+            led_set(true);   // steady on = refresh armed; keep holding to 20 s for setup
         }
         if (waited >= BOOT_HOLD_WINDOW_MS && waited % 1000 == 0)
             ESP_LOGW(TAG, "still holding (%d ms)... keep holding to %d for provisioning",
                      waited, PROVISION_HOLD_MS);
     }
+    led_set(false);
     // Released before the provisioning threshold. A deliberate >= 3 s hold is a
     // refresh request; a quick tap is just a normal wake-and-check. Classified
     // here on RELEASE, so a continuous hold to 20 s hits provisioning above and

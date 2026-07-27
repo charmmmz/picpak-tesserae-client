@@ -92,6 +92,13 @@ void epd_display(const uint8_t *fb) {
 }
 
 void epd_sleep(void) {
-    epd_cmd(0x02); epd_wait_busy();      // Power OFF
-    epd_cmd(0x07);                       // Deep Sleep
+    // Power OFF (0x02) carries a 0x00 parameter byte on this controller.
+    uint8_t pof = 0x00;
+    epd_cmd(0x02); epd_data(&pof, 1); epd_wait_busy();
+    // Deep Sleep (0x07) requires the 0xA5 check-code parameter — the controller
+    // ignores a bare 0x07 (a guard against an accidental sleep), so without the
+    // check-code the panel never leaves standby and keeps drawing between wakes.
+    uint8_t dslp = 0xA5;
+    epd_cmd(0x07); epd_data(&dslp, 1);
+    ESP_LOGI(TAG, "panel deep sleep");
 }

@@ -7,16 +7,18 @@
 // Cross-wake state in RTC-RAM: survives deep-sleep, nulled on cold boot -> always boot NORMAL.
 RTC_DATA_ATTR static lowbatt_state_t s_lb;
 
-lowbatt_action_t lowbatt_gate(int batt_mv, esp_sleep_wakeup_cause_t cause) {
+lowbatt_action_t lowbatt_gate(int batt_mv, bool force_resume) {
     lowbatt_cfg_t cfg = {
         .arm_mv = LOWBATT_ARM_MV, .clr_mv = LOWBATT_CLR_MV,
         .rise_mv = LOWBATT_RISE_MV, .arm_streak = LOWBATT_STREAK,
     };
-    bool button_wake = (cause == ESP_SLEEP_WAKEUP_GPIO);   // deliberate resume/flash
-    // usb_present=false in v1 (no USB-SOF detection); button-wake is the escape hatch.
-    lowbatt_result_t r = lowbatt_decide(batt_mv, button_wake, /*usb=*/false, /*enabled=*/true, s_lb, cfg);
+    // force_resume is set only by the deliberate 3 s-hold override (see main.c); a plain tap and
+    // a timer wake both pass false and are evaluated normally. usb_present=false in v1 (no USB-SOF).
+    lowbatt_result_t r = lowbatt_decide(batt_mv, force_resume, /*usb=*/false, /*enabled=*/true, s_lb, cfg);
     s_lb = r.next;   // persist for the next wake (RTC-RAM)
     return r.action;
 }
+
+bool lowbatt_locked(void) { return s_lb.lock; }
 
 uint32_t lowbatt_wake_s(void) { return LOWBATT_WAKE_S; }

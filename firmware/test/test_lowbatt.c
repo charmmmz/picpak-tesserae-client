@@ -6,12 +6,14 @@
 #include <stdio.h>
 #include "lowbatt_core.h"
 
+// Representative config for exercising the FSM — not the shipped policy (see lowbatt.h for that;
+// it can't be included here, it pulls in esp_sleep.h). The logic under test is threshold-agnostic.
 static const lowbatt_cfg_t CFG = { .arm_mv = 3300, .clr_mv = 3500, .rise_mv = 40, .arm_streak = 2 };
 static const lowbatt_state_t FRESH = { .lock = false, .last_mv = -1, .low_streak = 0 };
 
 // helper: decide with the gate enabled + default cfg
-static lowbatt_result_t d(int mv, bool btn, bool usb, lowbatt_state_t st) {
-    return lowbatt_decide(mv, btn, usb, true, st, CFG);
+static lowbatt_result_t d(int mv, bool force, bool usb, lowbatt_state_t st) {
+    return lowbatt_decide(mv, force, usb, true, st, CFG);
 }
 
 int main(void) {
@@ -53,11 +55,21 @@ int main(void) {
     r = d(3520, false, false, locked);
     assert(r.action == LOWBATT_NORMAL && !r.next.lock);
 
-    // button/usb wake bypasses the gate even when locked + low
-    r = d(3100, true, false, locked);
-    assert(r.action == LOWBATT_NORMAL && !r.next.lock);
-    r = d(3100, false, true, locked);
-    assert(r.action == LOWBATT_NORMAL && !r.next.lock);
+    // force-resume (3 s hold) or USB wake overrides the gate even when locked + low, and
+    // pre-loads the debounce so a single still-low next read re-arms (no wasted extra fetch)
+    r = d(3100, /*force*/true, false, locked);
+    assert(r.action == LOWBATT_NORMAL && !r.next.lock && r.next.low_streak == CFG.arm_streak - 1);
+    r = d(3100, false, /*usb*/true, locked);
+    assert(r.action == LOWBATT_NORMAL && !r.next.lock && r.next.low_streak == CFG.arm_streak - 1);
+
+    // prompt re-arm: after a still-low override, one more low read arms immediately
+    lowbatt_result_t ov = d(3100, /*force*/true, false, locked);   // low_streak now arm_streak-1
+    r = d(3100, false, false, ov.next);                            // single low read
+    assert(r.action == LOWBATT_ARM && r.next.lock);
+
+    // force-resume while NOT locked -> NORMAL, no preload (unchanged normal-state behavior)
+    r = d(3100, /*force*/true, false, FRESH);
+    assert(r.action == LOWBATT_NORMAL && !r.next.lock && r.next.low_streak == 0);
 
     // implausible read never gates, state untouched
     r = d(-1, false, false, FRESH);

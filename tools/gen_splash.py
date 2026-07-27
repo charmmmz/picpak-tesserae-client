@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 varanu5 <https://github.com/varanu5>
 """Generate 400x300 2bpp BWRY splash blobs for the PicPak panel.
 
-Draws flat-colour layouts (no photo dithering) using only the 4 firmware
-palette colours, then packs 2bpp MSB-first with the SAME vertical flip as
+Draws flat colour-block layouts (spec: docs/superpowers/specs/
+2026-07-09-splash-redesign-design.md) using only the 4 firmware palette
+colours, then packs 2bpp MSB-first with the SAME vertical flip as
 server-plugin/renderers/esp32_bwry_bin/renderer.py (the panel scans
 bottom-to-top). Outputs exactly 30000 bytes each.
 
@@ -63,50 +66,77 @@ def pack_2bpp(idx):
     return out
 
 
-def mark(d, x, y, s):
-    """Black square logo mark (monochrome black-on-white splash)."""
-    d.rectangle([x, y, x + s, y + s], fill=PALETTE[BLACK])
+def brand(d, x, y):
+    """Small square mark + wordmark, black on white."""
+    d.rectangle([x, y + 2, x + 16, y + 18], fill=PALETTE[BLACK])
+    d.text((x + 26, y), "Tesserae", fill=PALETTE[BLACK], font=load_font(20))
+
+
+def wifi_icon(d, cx, cy, color):
+    """Wi-Fi arcs opening upward, dot at (cx, cy)."""
+    for r in (16, 30, 44):
+        d.arc([cx - r, cy - r, cx + r, cy + r], start=225, end=315,
+              fill=color, width=6)
+    d.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color)
+
+
+def check_icon(d, cx, cy, r, color):
+    """Circle outline with a checkmark, single colour."""
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color, width=5)
+    w = int(r * 0.9)
+    pts = [(cx - w * 0.55, cy + 0.05 * w), (cx - w * 0.15, cy + 0.45 * w),
+           (cx + w * 0.6, cy - 0.4 * w)]
+    d.line(pts, fill=color, width=7, joint="curve")
+
+
+def battery_icon(d, cx, cy, color, w=80, h=44):
+    """Battery outline + terminal nub, charge segment at ~22%."""
+    x0, y0, x1, y1 = cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2
+    d.rounded_rectangle([x0, y0, x1, y1], radius=8, outline=color, width=5)
+    d.rounded_rectangle([x1 + 3, cy - 12, x1 + 12, cy + 12], radius=3, fill=color)
+    d.rectangle([x0 + 7, y0 + 7, x0 + 7 + int((w - 14) * 0.22), y1 - 7], fill=color)
+
+
+def colour_page(panel_color):
+    """White page with a full-height state-colour panel at x 0-128 and brand row."""
+    img = Image.new("RGB", (PANEL_W, PANEL_H), PALETTE[WHITE])
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 128, PANEL_H], fill=panel_color)
+    brand(d, 152, 22)
+    return img, d
 
 
 def make_setup():
-    img = Image.new("RGB", (PANEL_W, PANEL_H), PALETTE[WHITE])
-    d = ImageDraw.Draw(img)
-    black = PALETTE[BLACK]
-    f_brand, f_h, f_lbl, f_foot = load_font(30), load_font(34), load_font(24), load_font(20)
-    mark(d, 24, 24, 28)
-    d.text((62, 26), "Tesserae", fill=black, font=f_brand)
-    d.text((24, 84), "Wi-Fi Setup", fill=black, font=f_h)
-    d.line([24, 130, 376, 130], fill=black, width=2)
-    d.text((24, 148), "Network", fill=black, font=f_lbl)
-    d.text((150, 148), AP_SSID, fill=black, font=f_lbl)
-    d.text((24, 184), "Password", fill=black, font=f_lbl)
-    d.text((150, 184), AP_PASS, fill=black, font=f_lbl)
-    d.text((24, 240), "Join this Wi-Fi, then open", fill=black, font=f_foot)
-    d.text((24, 266), "http://192.168.4.1", fill=black, font=f_foot)
+    img, d = colour_page(PALETTE[YELLOW])
+    wifi_icon(d, 64, 150, PALETTE[BLACK])
+    d.text((152, 58), "Wi-Fi Setup", fill=PALETTE[BLACK], font=load_font(30))
+    f_lbl, f_val = load_font(15), load_font(23)
+    d.text((152, 116), "NETWORK", fill=PALETTE[RED], font=f_lbl)
+    d.text((152, 136), AP_SSID, fill=PALETTE[BLACK], font=f_val)
+    d.text((152, 176), "PASSWORD", fill=PALETTE[RED], font=f_lbl)
+    d.text((152, 196), AP_PASS, fill=PALETTE[BLACK], font=f_val)
+    d.text((152, 244), "Join this Wi-Fi, then open", fill=PALETTE[BLACK], font=load_font(16))
+    d.text((152, 264), "http://192.168.4.1", fill=PALETTE[BLACK], font=load_font(16))
     return img
 
 
 def make_paired():
-    img = Image.new("RGB", (PANEL_W, PANEL_H), PALETTE[WHITE])
-    d = ImageDraw.Draw(img)
-    black = PALETTE[BLACK]
-    f_brand, f_h, f_sub = load_font(30), load_font(34), load_font(24)
-    mark(d, 150, 78, 28)
-    d.text((188, 80), "Tesserae", fill=black, font=f_brand)
-    d.text((112, 148), "Connected", fill=black, font=f_h)
-    d.text((84, 196), "Waiting for first frame...", fill=black, font=f_sub)
+    img, d = colour_page(PALETTE[BLACK])
+    check_icon(d, 64, 150, 34, PALETTE[WHITE])
+    d.text((152, 112), "Connected", fill=PALETTE[BLACK], font=load_font(32))
+    d.rectangle([152, 156, 232, 161], fill=PALETTE[YELLOW])
+    d.text((152, 176), "Waiting for", fill=PALETTE[BLACK], font=load_font(20))
+    d.text((152, 202), "first frame...", fill=PALETTE[BLACK], font=load_font(20))
     return img
 
 
 def make_lowbatt():
-    img = Image.new("RGB", (PANEL_W, PANEL_H), PALETTE[WHITE])
-    d = ImageDraw.Draw(img)
-    black = PALETTE[BLACK]
-    f_brand, f_h, f_sub = load_font(30), load_font(34), load_font(22)
-    mark(d, 150, 74, 28)
-    d.text((188, 76), "Tesserae", fill=black, font=f_brand)
-    d.text((120, 144), "Battery low", fill=black, font=f_h)
-    d.text((92, 192), "Please connect a charger.", fill=black, font=f_sub)
+    img, d = colour_page(PALETTE[RED])
+    battery_icon(d, 62, 150, PALETTE[WHITE])  # 62 not 64: optical centre incl. nub
+    d.text((152, 104), "Battery low", fill=PALETTE[BLACK], font=load_font(32))
+    d.rectangle([152, 148, 232, 153], fill=PALETTE[RED])
+    d.text((152, 168), "Please connect", fill=PALETTE[BLACK], font=load_font(20))
+    d.text((152, 194), "a charger.", fill=PALETTE[BLACK], font=load_font(20))
     return img
 
 

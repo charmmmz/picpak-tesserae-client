@@ -6,6 +6,12 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# GPIO21 is the on-board status LED AND the UART0 TX pin. Route the console to
+# the native USB-Serial-JTAG only (where logs are already read — the
+# /dev/cu.usbmodem* port), so UART0 no longer drives GPIO21 and the LED blinks
+# cleanly with no boot/log flicker. Serial monitoring is unchanged (it was
+# already the USB-JTAG secondary console); UART0 output went nowhere but the LED.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # PicPak power is marginal: WiFi radio current spikes dip Vdd into brownout.
 # Keep the brownout detector ON (safety), but buy headroom by running the CPU at
 # 80 MHz (much lower baseline current; WiFi works fine) and use the most tolerant
