@@ -29,7 +29,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION          "0.8.0"
+#define FW_VERSION          "0.8.1"
 #endif
 #define DEVICE_KIND         "picpak_client"
 

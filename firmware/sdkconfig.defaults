@@ -31,3 +31,9 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+# Captive-portal HTTP server: the ESP-IDF default request-header cap is 512 bytes,
+# which a normal browser overruns once it carries cookies for 192.168.4.1 (the
+# form then fails with HTTP 431 "Header fields are too long"; incognito, having no
+# cookies, fits and works). Raise the cap so a cookie-laden setup POST is accepted.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+CONFIG_HTTPD_MAX_URI_LEN=1024

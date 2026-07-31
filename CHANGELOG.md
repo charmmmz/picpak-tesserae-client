@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.1
+
+### Fixed
+- **Captive-portal setup form rejected with HTTP 431** (`firmware/sdkconfig.defaults`). The
+  provisioning HTTP server used the ESP-IDF default request-header cap of 512 bytes. A normal
+  browser carrying cookies for `192.168.4.1` overruns that, so submitting the setup form failed
+  with `431 "Header fields are too long"` and the device never joined WiFi or registered with the
+  server (incognito mode, having no cookies, sent smaller headers and worked). `CONFIG_HTTPD_MAX_REQ_HDR_LEN`
+  is raised `512 → 2048` (and `CONFIG_HTTPD_MAX_URI_LEN` `512 → 1024`) so a cookie-laden setup
+  submission is accepted from any normal browser. The extra RAM is used only while the setup AP is up.
+- `FW_VERSION` bumped `0.8.0` → `0.8.1`.
+
 ## 0.8.0
 
 ### Fixed
