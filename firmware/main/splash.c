@@ -17,6 +17,8 @@ extern const uint8_t _binary_splash_paired_bin_start[];
 extern const uint8_t _binary_splash_paired_bin_end[];
 extern const uint8_t _binary_splash_lowbatt_bin_start[];
 extern const uint8_t _binary_splash_lowbatt_bin_end[];
+extern const uint8_t _binary_splash_revoked_bin_start[];
+extern const uint8_t _binary_splash_revoked_bin_end[];
 
 static esp_err_t paint(const uint8_t *start, const uint8_t *end, const char *label) {
     size_t len = (size_t)(end - start);
@@ -44,4 +46,7 @@ esp_err_t splash_show_paired(void) {
 }
 esp_err_t splash_show_lowbatt(void) {
     return paint(_binary_splash_lowbatt_bin_start, _binary_splash_lowbatt_bin_end, "lowbatt");
+}
+esp_err_t splash_show_revoked(void) {
+    return paint(_binary_splash_revoked_bin_start, _binary_splash_revoked_bin_end, "revoked");
 }

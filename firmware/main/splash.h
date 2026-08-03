@@ -7,3 +7,4 @@
 esp_err_t splash_show_setup(void);   // logo + AP name/password (entering provisioning)
 esp_err_t splash_show_paired(void);  // "Connected — waiting for first frame" (post-submit, once)
 esp_err_t splash_show_lowbatt(void); // "Battery low — please charge" (low-battery gate)
+esp_err_t splash_show_revoked(void); // "Unpaired — removed from relay; hold button 20s" (relay revoke)

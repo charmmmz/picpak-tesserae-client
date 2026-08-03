@@ -9,6 +9,7 @@
 #include "wifi_manager.h"
 #include "rest_handler.h"
 #include "mqtt_handler.h"
+#include "relay.h"
 #include "provisioning.h"
 #include "splash.h"
 #include "lowbatt.h"
@@ -20,6 +21,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "esp_attr.h"   // RTC_NOINIT_ATTR
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -65,11 +67,12 @@ void app_main(void) {
     if (reason == ESP_RST_POWERON) s_button_event_seq = 0;
 
     // Provisioning: a 20s button-hold at wake, or no usable WiFi SSID, enters the
-    // captive portal. A shorter 3-20s hold is a refresh gesture (classified on
+    // captive portal. A shorter 5-20s hold is a refresh gesture (classified on
     // release; see power_boot_gesture). (Also runs the flash-hold window.)
     btn_gesture_t gesture = power_boot_gesture();
     bool want_provision = (gesture == BTN_GESTURE_PROVISION);
     bool want_refresh   = (gesture == BTN_GESTURE_REFRESH);
+    bool want_next      = (gesture == BTN_GESTURE_TAP);   // short press -> deck next (REST)
     if (!want_provision) {
         char ssid[33], pass[65];
         want_provision = !config_get_wifi(ssid, sizeof ssid, pass, sizeof pass);
@@ -107,7 +110,7 @@ void app_main(void) {
     // + a daily low-power poll until the voltage recovers (charging). A button-wake resumes
     // NORMAL so the device is always recoverable — and is the fast way back after plugging in.
     power_measure_battery();
-    bool force_resume = want_refresh;              // a 3 s hold is the deliberate override when locked
+    bool force_resume = want_refresh;              // a 5 s hold is the deliberate override when locked
     bool was_locked   = lowbatt_locked();          // read before the gate mutates RTC state
     switch (lowbatt_gate(power_battery_mv(), force_resume)) {
         case LOWBATT_ARM:
@@ -125,9 +128,9 @@ void app_main(void) {
             break;   // healthy / recovered / override -> normal cycle
     }
     // Just recovered from the locked state via an automatic route (a tap that charged, or the daily
-    // poll) — not a 3 s hold. The charge splash was painted outside the ETag machinery, so a plain
+    // poll) — not a 5 s hold. The charge splash was painted outside the ETag machinery, so a plain
     // re-fetch could return 304 and skip the paint, stranding the splash. Clear the ETag to force a
-    // 200 repaint of the live photo. A 3 s hold (want_refresh) is left alone: its refresh path
+    // 200 repaint of the live photo. A 5 s hold (want_refresh) is left alone: its refresh path
     // already drops If-None-Match and pulls fresh content — identical to the good-battery gesture.
     if (was_locked && !want_refresh) config_set_etag("");
 
@@ -148,21 +151,68 @@ void app_main(void) {
     // REST-recommended default). Both loops are network-I/O-only — a new frame
     // is buffered, not painted.
     uint8_t transport = config_get_transport(1);
+    // Cloud relay is a mutually-exclusive third transport: when configured it
+    // wins and the REST/MQTT dispatch below is skipped entirely (same "one
+    // transport" rule as the reference — a relay panel has no home server).
+    bool use_relay = config_relay_configured();
     int next = SLEEP_INTERVAL_DEFAULT_S;
     bool wifi_ok = false;
     vTaskDelay(pdMS_TO_TICKS(WIFI_SETTLE_MS));   // let the rail settle before the radio
     if (wifi_start_sta() == ESP_OK) {
         wifi_ok = true;
-        if (transport == 0) {
+        if (use_relay) {
+            // Relay defaults to https, so TLS validity needs a plausible clock —
+            // same sanity pattern as the REST https path.
+            char rurl[160] = {0};
+            config_get_relay_url(rurl, sizeof rurl);
+            if (strncmp(rurl, "https://", 8) == 0 && time(NULL) < CLOCK_SANE_EPOCH)
+                wifi_sync_ntp();
+            // Pairing may span deep sleeps; once paired, run the full relay cycle.
+            if (relay_pairing_pending()) {
+                switch (relay_pair_step()) {
+                    case RELAY_PAIR_DONE:    ESP_LOGI(TAG, "relay pairing complete"); break;
+                    case RELAY_PAIR_WAITING: ESP_LOGI(TAG, "relay pairing pending; retry next wake"); break;
+                    case RELAY_PAIR_EXPIRED: ESP_LOGW(TAG, "relay pairing code expired; re-provision"); break;
+                    default:                 ESP_LOGW(TAG, "relay pairing step failed; retry next wake"); break;
+                }
+            }
+            // A button gesture now works over relay (server/relay v0.240.0+): it
+            // rides the status body. tap -> BTN_TAP_BUTTON ("right"); 5 s hold -> "refresh".
+            const char *btn = want_refresh ? "refresh"
+                            : (want_next && BTN_TAP_BUTTON[0]) ? BTN_TAP_BUTTON
+                            : NULL;
+            uint32_t button_ev = btn ? ++s_button_event_seq : 0;
+            if (relay_ready()) {
+                next = relay_run_loop(btn, button_ev);
+                // Post-button window: home learns of the press on its next relay poll
+                // (~30 s) then renders a response. Stay awake and keep polling the
+                // mailbox until it arrives, so the press feels responsive. Only when
+                // nothing was already staged this wake; break on the first NEW frame
+                // (painted after wifi_stop, radio off). No new-press chaining.
+                if (btn && relay_pending_frame() == NULL && !relay_pairing_revoked()) {
+                    ESP_LOGI(TAG, "relay button window: up to %d s awake, polling",
+                             RELAY_BUTTON_WINDOW_S);
+                    int64_t deadline = esp_timer_get_time() +
+                                       (int64_t)RELAY_BUTTON_WINDOW_S * 1000000;
+                    while (esp_timer_get_time() < deadline && !relay_pairing_revoked()) {
+                        vTaskDelay(pdMS_TO_TICKS(RELAY_BUTTON_POLL_MS));
+                        if (relay_poll_frame()) break;   // NEW response staged
+                    }
+                    ESP_LOGI(TAG, "relay button window closed");
+                }
+            } else {
+                next = config_get_sleep_s(SLEEP_INTERVAL_DEFAULT_S);
+            }
+        } else if (transport == 0) {
             // MQTT has no server_time, so it is the one path that needs a real
             // clock source (mqtts:// cert validity). Sync only when the clock
             // is implausible — the C3 RTC persists across deep sleep, so this
             // normally fires once per power-on. REST stays NTP-free (0.3.0).
             if (time(NULL) < CLOCK_SANE_EPOCH) wifi_sync_ntp();
-            // Button refresh is REST-only: the server dispatches button actions
+            // Button dispatch is REST-only: the server dispatches button actions
             // on its HTTP endpoints, not over MQTT's push-only frame topic.
-            if (want_refresh)
-                ESP_LOGW(TAG, "refresh gesture ignored: not supported on MQTT transport");
+            if (want_refresh || want_next)
+                ESP_LOGW(TAG, "button gesture ignored: not supported on MQTT transport");
             next = mqtt_run_loop(reason);
         } else {
             // https cert validation needs a plausible wall clock too (validity
@@ -171,14 +221,30 @@ void app_main(void) {
             config_get_server_url(srv, sizeof srv);
             if (strncmp(srv, "https://", 8) == 0 && time(NULL) < CLOCK_SANE_EPOCH)
                 wifi_sync_ntp();
-            // A refresh gesture this wake gets a fresh, RTC-retained event id.
-            uint32_t refresh_ev = want_refresh ? ++s_button_event_seq : 0;
-            next = rest_run_loop(reason, want_refresh, refresh_ev);
+            // A button gesture this wake gets a fresh, RTC-retained event id.
+            // "refresh" (5 s hold) re-renders in place; a tap sends BTN_TAP_BUTTON
+            // (deck next) unless it's disabled (empty).
+            const char *btn = want_refresh ? "refresh"
+                            : (want_next && BTN_TAP_BUTTON[0]) ? BTN_TAP_BUTTON
+                            : NULL;
+            uint32_t button_ev = btn ? ++s_button_event_seq : 0;
+            next = rest_run_loop(reason, btn, button_ev);
         }
     } else {
         ESP_LOGW(TAG, "WiFi failed; keeping last image, retry next wake");
     }
     wifi_stop();
+
+    // A revoked pairing is terminal (two consecutive 401 wakes; server/relay
+    // v0.240.0+). Drop it (keeping the relay URL), show setup so a fresh code
+    // re-pairs, and sleep. Re-pair is a physical action anyway, so we don't
+    // auto-open AP mode here — the setup splash tells the user what to do.
+    if (use_relay && relay_pairing_revoked()) {
+        ESP_LOGW(TAG, "relay pairing revoked (2 wakes of 401); forgetting + re-pair splash");
+        relay_forget_revoked_pairing();
+        splash_show_revoked();   // "Unpaired — hold button 20s" (not the AP-join setup splash)
+        power_deep_sleep((uint32_t)next);   // no return
+    }
 
     // One-shot after provisioning (any transport): WiFi itself failed with a
     // recognisable misconfiguration signature — reopen the portal with the
@@ -221,14 +287,17 @@ void app_main(void) {
     // spikes, and the radio idling through a 13-22 s refresh burns ~80 mA for
     // nothing. EPD init is lazy for the same reason: most wakes end unchanged
     // and the panel never powers up at all.
-    const uint8_t *fb = (transport == 0) ? mqtt_pending_frame() : rest_pending_frame();
+    const uint8_t *fb = use_relay        ? relay_pending_frame()
+                      : (transport == 0) ? mqtt_pending_frame()
+                                         : rest_pending_frame();
     if (fb) {
         if (epd_init() == ESP_OK) {
             ESP_LOGI(TAG, "painting new frame (radio off)");
             epd_display(fb);
             // Persist the frame ref (ETag / URL) only after a successful paint.
-            if (transport == 0) mqtt_frame_painted();
-            else                rest_frame_painted();
+            if (use_relay)           relay_frame_painted();
+            else if (transport == 0) mqtt_frame_painted();
+            else                     rest_frame_painted();
             epd_sleep();
         } else {
             ESP_LOGW(TAG, "epd_init failed; keeping last image, retry next wake");

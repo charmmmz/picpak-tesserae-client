@@ -89,7 +89,7 @@ btn_gesture_t power_boot_gesture(void) {
     if (!power_button_held()) return BTN_GESTURE_NONE;   // timer wake, or a tap already released
     // Button is held. The one-blink wake acknowledge already fired in app_main;
     // add the hold progression as screen-free feedback of how long it is held:
-    // off (<3 s) -> steady on (refresh armed at 3 s) -> rapid burst (provisioning
+    // off (<5 s) -> steady on (refresh armed at 5 s) -> rapid burst (provisioning
     // armed at 20 s).
     ESP_LOGW(TAG, "button held at boot: flash window %d ms (refresh at %d ms, provisioning at %d ms)",
              BOOT_HOLD_WINDOW_MS, BTN_REFRESH_HOLD_MS, PROVISION_HOLD_MS);
@@ -114,15 +114,19 @@ btn_gesture_t power_boot_gesture(void) {
                      waited, PROVISION_HOLD_MS);
     }
     led_set(false);
-    // Released before the provisioning threshold. A deliberate >= 3 s hold is a
-    // refresh request; a quick tap is just a normal wake-and-check. Classified
-    // here on RELEASE, so a continuous hold to 20 s hits provisioning above and
-    // never trips a refresh on its way there.
+    // Released before the provisioning threshold. A deliberate >= 5 s hold is a
+    // refresh request. Classified here on RELEASE, so a continuous hold to 20 s
+    // hits provisioning above and never trips a refresh on its way there.
     if (waited >= BTN_REFRESH_HOLD_MS) {
         ESP_LOGW(TAG, "held %d ms -> refresh request", waited);
         return BTN_GESTURE_REFRESH;
     }
-    return BTN_GESTURE_NONE;
+    // Held at boot but released before 5 s: a deliberate short press (tap). A
+    // human tap holds the pin low ~50-150 ms, long enough to have read as held
+    // at boot, so electrical noise on GPIO2 (shared with the battery ADC) can't
+    // fake it. Maps to a deck next-page nav in the REST loop.
+    ESP_LOGW(TAG, "held %d ms -> tap (deck next)", waited);
+    return BTN_GESTURE_TAP;
 }
 
 void power_deep_sleep(uint32_t seconds) {

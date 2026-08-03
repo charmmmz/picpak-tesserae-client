@@ -12,7 +12,7 @@ lowbatt_action_t lowbatt_gate(int batt_mv, bool force_resume) {
         .arm_mv = LOWBATT_ARM_MV, .clr_mv = LOWBATT_CLR_MV,
         .rise_mv = LOWBATT_RISE_MV, .arm_streak = LOWBATT_STREAK,
     };
-    // force_resume is set only by the deliberate 3 s-hold override (see main.c); a plain tap and
+    // force_resume is set only by the deliberate 5 s-hold override (see main.c); a plain tap and
     // a timer wake both pass false and are evaluated normally. usb_present=false in v1 (no USB-SOF).
     lowbatt_result_t r = lowbatt_decide(batt_mv, force_resume, /*usb=*/false, /*enabled=*/true, s_lb, cfg);
     s_lb = r.next;   // persist for the next wake (RTC-RAM)

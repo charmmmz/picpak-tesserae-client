@@ -6,7 +6,7 @@
 // low-power poll; while locked it stays low until the cell recovers — either absolutely
 // (>= CLEAR) or by climbing RISE mV above its lowest-seen baseline (a rising cell means a
 // charger is attached; the C3 has no VBUS line to sense that directly). A force-resume (a
-// deliberate 3 s button hold) or a USB wake unlocks immediately; a plain tap is treated as an
+// deliberate 5 s button hold) or a USB wake unlocks immediately; a plain tap is treated as an
 // ordinary evaluation wake. State is caller-owned (kept in RTC-RAM), so this
 // stays a pure function and is unit-testable on the host.
 #pragma once
@@ -44,7 +44,7 @@ typedef struct {
 // Decide the action for this wake and the state to carry forward. Pure: no side effects.
 //   batt_mv     below LOWBATT_MIN_PLAUSIBLE_MV means an implausible read (ADC failure, no
 //               cell, button shorting the shared ADC pin) — never gate on garbage.
-//   force_resume deliberate override (a 3 s button hold): unlock now regardless of the reading.
+//   force_resume deliberate override (a 5 s button hold): unlock now regardless of the reading.
 //   usb_present tethered to a data host (kept for callers that can detect it; false is fine).
 //   enabled     master switch; off -> always NORMAL, state untouched.
 static inline lowbatt_result_t lowbatt_decide(int batt_mv, bool force_resume, bool usb_present,

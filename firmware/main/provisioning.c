@@ -8,6 +8,7 @@
 #include "provision_form.h"
 #include "mqtt_parse.h"
 #include "config_store.h"
+#include "relay.h"        // RELAY_DEFAULT_URL
 #include "defaults.h"
 
 #include <stdio.h>
@@ -224,8 +225,8 @@ static const char k_form_wifi_fmt[] =
 "</div>"
 "</section>";
 
-// Transport-mode card; %s x2 = (mqtt_checked, rest_checked) — pre-checked from
-// the stored transport so re-provisioning reopens on the current mode.
+// Transport-mode card; %s x3 = (mqtt_checked, rest_checked, relay_checked) —
+// pre-checked from the stored config so re-provisioning reopens on the current mode.
 static const char k_form_transport_fmt[] =
 "<section class=\"card\"><h2>Transport</h2>"
 "<div class=\"field\">"
@@ -239,9 +240,17 @@ static const char k_form_transport_fmt[] =
 "</label>"
 "<label class=\"radio\" for=\"tr-rest\">"
 "<input type=\"radio\" name=\"transport\" value=\"rest\" id=\"tr-rest\"%s>"
-"<span><strong>REST API</strong> <span style=\"color:var(--muted);font-weight:400\">(recommended)</span>"
+"<span><strong>REST API</strong> <strong>(recommended)</strong>"
 "<p class=\"hint\" style=\"margin:2px 0 0\">"
 "Polls the Tesserae server directly. No broker needed.</p>"
+"</span>"
+"</label>"
+"<label class=\"radio\" for=\"tr-relay\">"
+"<input type=\"radio\" name=\"transport\" value=\"relay\" id=\"tr-relay\"%s>"
+"<span><strong>CLOUD RELAY</strong> <span style=\"color:var(--muted);font-weight:400\">(remote panel)</span>"
+"<p class=\"hint\" style=\"margin:2px 0 0\">"
+"For a panel away from your Tesserae server (another home, CGNAT). Talks to a "
+"relay mailbox; no server URL needed.</p>"
 "</span>"
 "</label>"
 "</div>"
@@ -249,7 +258,7 @@ static const char k_form_transport_fmt[] =
 
 // Device + MQTT card; %s x3 = (device_id, mqtt_uri, mqtt_user).
 static const char k_form_mqtt_fmt[] =
-"<section class=\"card\"><h2>Device</h2>"
+"<section class=\"card hide-on-relay\"><h2>Device</h2>"
 "<div class=\"field\">"
 "<label for=\"device_id\">Device id <span style=\"color:var(--muted);font-weight:400\">(optional)</span></label>"
 "<input id=\"device_id\" name=\"device_id\" maxlength=\"32\" "
@@ -298,7 +307,31 @@ static const char k_form_rest_fmt[] =
 "<em>Register</em> on Settings &rarr; Devices). Fill in to skip that "
 "step using a code from <em>Pair new device</em>.</p>"
 "</div>"
-"</section>"
+"</section>";
+
+// Cloud-relay card; %s x2 = (relay_url, relay_code). Hidden by JS unless transport=relay.
+static const char k_form_relay_fmt[] =
+"<section class=\"card relay-only\"><h2>Cloud Relay</h2>"
+"<div class=\"field\">"
+"<label for=\"relay_url\">Relay URL</label>"
+"<input id=\"relay_url\" name=\"relay_url\" maxlength=\"159\" autocomplete=\"off\" "
+"value=\"%s\" placeholder=\"https://relay.tesserae.ink\">"
+"<p class=\"hint\">The cloud mailbox this panel and your home Tesserae both reach "
+"<em>outbound</em> &mdash; nothing on your network is opened. "
+"<strong>Leave blank</strong> to use the default, "
+"<code>https://relay.tesserae.ink</code>.</p>"
+"</div>"
+"<div class=\"field\">"
+"<label for=\"relay_code\">Pairing code</label>"
+"<input id=\"relay_code\" name=\"relay_code\" maxlength=\"32\" autocomplete=\"off\" "
+"value=\"%s\" placeholder=\"from Settings &rarr; Cloud relay\">"
+"<p class=\"hint\">A single-use code from your Tesserae server: "
+"<em>Settings &rarr; Cloud relay &rarr; Add a remote panel</em>.</p>"
+"</div>"
+"</section>";
+
+// Submit button + form close, emitted after the last card.
+static const char k_form_submit[] =
 "<button class=\"submit\" type=\"submit\">Save &amp; restart</button>"
 "</form>";
 
@@ -318,12 +351,13 @@ static const char k_tail[] =
 "document.getElementById('wifi-pw').focus();}"
 "});}"
 "function applyTransport(){"
-"const m=document.getElementById('tr-mqtt').checked;"
-"document.querySelectorAll('.mqtt-only').forEach(n=>n.style.display=m?'':'none');"
-"document.querySelectorAll('.rest-only').forEach(n=>n.style.display=m?'none':'');"
+"const t=document.querySelector('input[name=transport]:checked').value;"
+"document.querySelectorAll('.mqtt-only').forEach(n=>n.style.display=(t=='mqtt')?'':'none');"
+"document.querySelectorAll('.rest-only').forEach(n=>n.style.display=(t=='rest')?'':'none');"
+"document.querySelectorAll('.relay-only').forEach(n=>n.style.display=(t=='relay')?'':'none');"
+"document.querySelectorAll('.hide-on-relay').forEach(n=>n.style.display=(t=='relay')?'none':'');"
 "}"
-"document.getElementById('tr-mqtt').addEventListener('change',applyTransport);"
-"document.getElementById('tr-rest').addEventListener('change',applyTransport);"
+"document.querySelectorAll('input[name=transport]').forEach(n=>n.addEventListener('change',applyTransport));"
 "applyTransport();"
 "</script>"
 // Credits footer. Plain text, not links: the captive portal's DNS hijack
@@ -371,6 +405,13 @@ static esp_err_t render_form(httpd_req_t *req, const char *error)
     config_get_mqtt(mqtt_uri, sizeof mqtt_uri, mqtt_user, sizeof mqtt_user,
                     mqtt_pass, sizeof mqtt_pass);   // pass unused for the form
 
+    // Cloud relay is orthogonal to the MQTT/REST transport int: when configured
+    // it wins at runtime, so the form pre-selects it (and neither MQTT nor REST).
+    bool relay_cfg = config_relay_configured();
+    char relay_url[160] = {0}, relay_code[40] = {0};
+    config_get_relay_url(relay_url, sizeof relay_url);
+    config_get_relay_code(relay_code, sizeof relay_code);
+
     // e_server sized for the worst case: 159-char URL fully &quot;-escaped
     // (159 x 6 = 954 + NUL) — 640 used to display a chopped URL in the form.
     char e_ssid[160], e_server[960], e_devid[100];
@@ -383,6 +424,11 @@ static esp_err_t render_form(httpd_req_t *req, const char *error)
     provform_html_escape(mqtt_uri,  e_uri,  sizeof e_uri);
     provform_html_escape(mqtt_user, e_user, sizeof e_user);
     const char *e_pair = "";
+    // Relay URL worst case: 159 chars fully &quot;-escaped = 954 + NUL. The
+    // pairing code is echoed back so a typo can be corrected without re-typing.
+    char e_rurl[960], e_rcode[200];
+    provform_html_escape(relay_url,  e_rurl,  sizeof e_rurl);
+    provform_html_escape(relay_code, e_rcode, sizeof e_rcode);
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, k_head);
@@ -420,25 +466,30 @@ static esp_err_t render_form(httpd_req_t *req, const char *error)
         }
     }
 
-    char form_wifi[2048];
-    snprintf(form_wifi, sizeof form_wifi, k_form_wifi_fmt, e_ssid, picker);
-    httpd_resp_sendstr_chunk(req, form_wifi);
+    // One buffer, reused for each card: snprintf then chunk-send in turn. Sized
+    // for the largest (the MQTT card: literal ~1.5 KB + e_devid(100) + e_uri(960)
+    // + e_user(384)). Sharing it keeps the httpd task stack (16 KB, see
+    // cfg.stack_size below) well under budget as cards are added.
+    char form[3072];
+    snprintf(form, sizeof form, k_form_wifi_fmt, e_ssid, picker);
+    httpd_resp_sendstr_chunk(req, form);
 
-    char form_transport[sizeof k_form_transport_fmt + 32];
-    snprintf(form_transport, sizeof form_transport, k_form_transport_fmt,
-             transport == 0 ? " checked" : "", transport == 0 ? "" : " checked");
-    httpd_resp_sendstr_chunk(req, form_transport);
+    snprintf(form, sizeof form, k_form_transport_fmt,
+             (!relay_cfg && transport == 0) ? " checked" : "",
+             (!relay_cfg && transport == 1) ? " checked" : "",
+             relay_cfg ? " checked" : "");
+    httpd_resp_sendstr_chunk(req, form);
 
-    // Literal ~1.5 KB + e_devid(100) + e_uri(960) + e_user(384). The httpd task
-    // runs on a 16 KB stack (see cfg.stack_size below) sized for these locals.
-    char form_mqtt[3072];
-    snprintf(form_mqtt, sizeof form_mqtt, k_form_mqtt_fmt, e_devid, e_uri, e_user);
-    httpd_resp_sendstr_chunk(req, form_mqtt);
+    snprintf(form, sizeof form, k_form_mqtt_fmt, e_devid, e_uri, e_user);
+    httpd_resp_sendstr_chunk(req, form);
 
-    char form_rest[2048];   // literal ~970B (incl. https hint) + escaped server_url (up to ~959B)
-    snprintf(form_rest, sizeof form_rest, k_form_rest_fmt, e_server, e_pair);
-    httpd_resp_sendstr_chunk(req, form_rest);
+    snprintf(form, sizeof form, k_form_rest_fmt, e_server, e_pair);
+    httpd_resp_sendstr_chunk(req, form);
 
+    snprintf(form, sizeof form, k_form_relay_fmt, e_rurl, e_rcode);
+    httpd_resp_sendstr_chunk(req, form);
+
+    httpd_resp_sendstr_chunk(req, k_form_submit);
     httpd_resp_sendstr_chunk(req, k_tail);
     httpd_resp_sendstr_chunk(req, NULL);   // terminate chunked response
     return ESP_OK;
@@ -488,6 +539,7 @@ static esp_err_t h_save(httpd_req_t *req)
     char ssid[33] = {0}, pass[65] = {0}, transport[8] = {0};
     char mqtt_uri[160] = {0}, mqtt_user[64] = {0}, mqtt_pass[64] = {0};
     char server_url[192] = {0}, pairing_code[16] = {0}, device_id[33] = {0};
+    char relay_url[192] = {0}, relay_code[40] = {0};
 
     bool have_ssid = provform_field(body, "ssid", ssid, sizeof ssid) && ssid[0];
     bool have_pass = provform_field(body, "pass", pass, sizeof pass) && pass[0];
@@ -497,11 +549,14 @@ static esp_err_t h_save(httpd_req_t *req)
     bool have_mpw  = provform_field(body, "mqtt_pass", mqtt_pass, sizeof mqtt_pass) && mqtt_pass[0];
     provform_field(body, "server_url",  server_url,  sizeof server_url);
     provform_field(body, "pairing_code", pairing_code, sizeof pairing_code);
+    provform_field(body, "relay_url",   relay_url,   sizeof relay_url);
+    provform_field(body, "relay_code",  relay_code,  sizeof relay_code);
     bool have_devid = provform_field(body, "device_id", device_id, sizeof device_id) && device_id[0];
 
-    // REST unless explicitly MQTT, so a malformed/absent field still lands on
-    // the recommended transport.
-    bool use_rest = (strcmp(transport, "mqtt") != 0);
+    // Cloud relay is its own transport; otherwise REST unless explicitly MQTT, so
+    // a malformed/absent field still lands on the recommended transport.
+    bool use_relay = (strcmp(transport, "relay") == 0);
+    bool use_rest  = !use_relay && (strcmp(transport, "mqtt") != 0);
     uint8_t mode = use_rest ? 1 : 0;
 
     if (!have_ssid) return render_form(req, "WiFi network name (SSID) is required.");
@@ -511,7 +566,17 @@ static esp_err_t h_save(httpd_req_t *req)
         return render_form(req,
             "Device id must be lowercase, start with a letter, and use only "
             "letters, digits, - or _ (2-32 chars).");
-    if (use_rest) {
+    if (use_relay) {
+        // A relay panel needs no server URL; it needs a relay URL + pairing code.
+        // A blank relay URL uses the hosted default (matches the field's hint), so
+        // the user only has to type a pairing code for the common case.
+        if (!relay_url[0]) strlcpy(relay_url, RELAY_DEFAULT_URL, sizeof relay_url);
+        provform_url_result_t r = provform_normalize_server_url(relay_url, sizeof relay_url);
+        if (r == PROVFORM_URL_BADSCHEME)
+            return render_form(req, "Relay URL must start with http:// or https://.");
+        if (!relay_code[0])
+            return render_form(req, "A pairing code is required for cloud relay.");
+    } else if (use_rest) {
         provform_url_result_t r = provform_normalize_server_url(server_url, sizeof server_url);
         if (r == PROVFORM_URL_EMPTY)
             return render_form(req, "Server URL is required when transport is REST.");
@@ -521,21 +586,39 @@ static esp_err_t h_save(httpd_req_t *req)
         return render_form(req, "MQTT broker URI is required when transport is MQTT.");
     }
 
-    ESP_LOGI(TAG, "saving ssid='%s' transport=%s (req='%s') server='%s' device_id='%s'",
-             ssid, use_rest ? "rest" : "mqtt", transport[0] ? transport : "rest",
-             use_rest ? server_url : "(mqtt)", have_devid ? device_id : "(auto)");
+    ESP_LOGI(TAG, "saving ssid='%s' transport=%s (req='%s') dest='%s' device_id='%s'",
+             ssid, use_relay ? "relay" : use_rest ? "rest" : "mqtt",
+             transport[0] ? transport : "rest",
+             use_relay ? relay_url : use_rest ? server_url : "(mqtt)",
+             have_devid ? device_id : "(auto)");
 
     config_set_wifi(ssid, have_pass ? pass : NULL);   // blank pass keeps existing
-    config_set_transport(mode);
     // Device id is shared across transports. Blank = leave as-is (auto-derive
     // from MAC at pair time, or keep the server's canonical id once paired).
     if (have_devid) config_set_device_id(device_id);
-    if (use_rest) {
-        config_set_server_url(server_url);
-        config_set_pairing_code(pairing_code);
+    if (use_relay) {
+        // Entering a pairing code is an explicit "pair with this code" action, so
+        // clear any existing pairing (frame key / ids / etags) first. Without this
+        // a stale frame key keeps relay_ready() true, relay_pairing_pending() false,
+        // and the new code is ignored — the device would keep polling the old
+        // (possibly revoked) mailbox. Clearing forces a fresh pair on the next wake.
+        config_clear_relay();
+        // Relay wins at runtime (main.c gates on config_relay_configured()), so
+        // the MQTT/REST transport int is left as-is.
+        config_set_relay_url(relay_url);
+        config_set_relay_code(relay_code);
     } else {
-        mqtt_normalize_uri(mqtt_uri, sizeof mqtt_uri);   // "host:1883" -> "mqtt://host:1883"
-        config_set_mqtt(mqtt_uri, mqtt_user, have_mpw ? mqtt_pass : NULL);
+        // A non-relay save clears relay state so switching transports is
+        // predictable (a stale relay pairing would otherwise keep winning).
+        config_clear_relay();
+        config_set_transport(mode);
+        if (use_rest) {
+            config_set_server_url(server_url);
+            config_set_pairing_code(pairing_code);
+        } else {
+            mqtt_normalize_uri(mqtt_uri, sizeof mqtt_uri);   // "host:1883" -> "mqtt://host:1883"
+            config_set_mqtt(mqtt_uri, mqtt_user, have_mpw ? mqtt_pass : NULL);
+        }
     }
     config_set_paired_pending(true);   // one-shot: forces a fresh repaint next boot
 

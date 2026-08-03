@@ -20,7 +20,7 @@
                                 // battery instantly (no forced WiFi), so polling seldom needs to
                                 // fire; a long interval avoids repeatedly waking a nearly-dead cell.
 
-// Run the gate for this wake. force_resume (a deliberate 3 s button hold) unlocks immediately;
+// Run the gate for this wake. force_resume (a deliberate 5 s button hold) unlocks immediately;
 // a plain tap and a timer wake both pass false. ARM -> caller paints the charge screen once +
 // deep-sleeps lowbatt_wake_s(); STAY_LOW -> deep-sleep without a repaint; NORMAL -> fall through.
 lowbatt_action_t lowbatt_gate(int batt_mv, bool force_resume);

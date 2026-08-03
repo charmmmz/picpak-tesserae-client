@@ -4,6 +4,7 @@
 #include "rest_handler.h"
 #include "config_store.h"
 #include "defaults.h"
+#include "rest_button.h"
 #include "image_fetcher.h"
 #include "framebuf.h"
 #include "heartbeat.h"
@@ -267,7 +268,7 @@ static int ensure_paired(const char *server) {
 }
 
 int rest_run_loop(esp_reset_reason_t reset_reason,
-                  bool button_refresh, uint32_t button_event_id) {
+                  const char *button, uint32_t button_event_id) {
     char server[160];
     config_get_server_url(server, sizeof(server));
     if (!server[0]) { ESP_LOGE(TAG, "no server URL"); return config_get_sleep_s(SLEEP_INTERVAL_DEFAULT_S); }
@@ -283,15 +284,16 @@ int rest_run_loop(esp_reset_reason_t reset_reason,
     char etag[80]; config_get_etag(etag, sizeof(etag));
     char url[256];
     int un = snprintf(url, sizeof(url), "%s/api/v1/device/%s/frame", server, dev_id);
-    if (button_refresh && un > 0 && un < (int)sizeof(url)) {
-        // A 3 s button hold: ask the server to re-render the current page (fresh
-        // data — e.g. latest weather) via ?button=refresh, and drop If-None-Match
-        // so the re-render comes back as 200 (a repaint), not a 304. The server
-        // dedups this press by button_event_id across /frame + the /status fallback.
-        etag[0] = '\0';
-        snprintf(url + un, sizeof(url) - un, "?button=refresh&button_event_id=%u",
-                 (unsigned)button_event_id);
-        ESP_LOGI(TAG, "button refresh: /frame?button=refresh (event %u)", (unsigned)button_event_id);
+    if (un > 0 && un < (int)sizeof(url) && button && button[0]) {
+        // A button wake. "refresh" (5 s hold) re-renders the current page and
+        // drops If-None-Match so the re-render comes back as 200; navigation
+        // buttons (a tap -> "right") keep the ETag so an unchanged frame still
+        // 304s. The server dedups the press by button_event_id across /frame +
+        // the /status fallback.
+        if (rest_button_clears_etag(button)) etag[0] = '\0';
+        rest_button_query(url, (size_t)un, sizeof(url), button, button_event_id);
+        ESP_LOGI(TAG, "button %s: /frame?button=%s (event %u)",
+                 button, button, (unsigned)button_event_id);
     }
     static char fbuf[REST_RESP_MAX];
     fbuf[0] = '\0';
@@ -340,7 +342,7 @@ int rest_run_loop(esp_reset_reason_t reset_reason,
     // Fallback delivery: only report the button on /status if /frame didn't
     // acknowledge it (auth/network failure before the server dispatched it). The
     // server dedups by button_event_id, so a stray double-send is harmless.
-    const char *btn = (button_refresh && !frame_acked) ? "refresh" : NULL;
+    const char *btn = (button && button[0] && !frame_acked) ? button : NULL;
     heartbeat_json(hb, sizeof(hb), (int)sleep_s, reset_reason, btn, button_event_id);
     snprintf(url, sizeof(url), "%s/api/v1/device/%s/status", server, dev_id);
     static char sbuf[REST_RESP_MAX];

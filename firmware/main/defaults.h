@@ -29,7 +29,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION          "0.8.1"
+#define FW_VERSION          "0.9.0"
 #endif
 #define DEVICE_KIND         "picpak_client"
 
@@ -77,12 +77,24 @@
 // re-flashable.
 #define BOOT_HOLD_WINDOW_MS        15000
 // Button hold thresholds (classified on RELEASE, see power_boot_gesture):
-//   tap (< this)            -> normal wake + check (today's behaviour)
-//   >= this, < PROVISION    -> refresh (REST: /frame?button=refresh, server re-renders)
-//   >= PROVISION_HOLD_MS    -> captive portal (unchanged)
+//   tap (held at boot, < this) -> deck next (REST: /frame?button=BTN_TAP_BUTTON)
+//   >= this, < PROVISION       -> refresh (REST: /frame?button=refresh, server re-renders)
+//   >= PROVISION_HOLD_MS        -> captive portal (unchanged)
 // A continuous hold to 20 s reaches provisioning and never fires a refresh on the
 // way, so the existing provisioning gesture is untouched.
-#define BTN_REFRESH_HOLD_MS        3000
+#define BTN_REFRESH_HOLD_MS        5000
+
+// Button name a tap (short press) sends on REST /frame. "right" = the server's
+// default deck/rotation "next" (automatic prev/next deck ordering, no per-deck
+// graph wiring). Set to "" to disable the tap action (a tap becomes a plain wake).
+#define BTN_TAP_BUTTON             "right"
+
+// Post-button relay window: after a button relay wake, stay awake this long
+// re-polling the mailbox for home's response (store-and-forward is ~30 s on the
+// first press), painting it when it arrives. Fixed on-device (no server
+// button_wake_s), no press-chaining. Requires server/relay v0.240.0+.
+#define RELAY_BUTTON_WINDOW_S      45
+#define RELAY_BUTTON_POLL_MS       5000
 
 // --- Captive-portal provisioning ---
 #define PROVISION_AP_SSID          "Tesserae-Setup"

@@ -14,6 +14,7 @@ static const char *TAG = "cfg";
 #define NS_WIFI  "wifi"
 #define NS_REST  "rest"
 #define NS_STATE "state"
+#define NS_RELAY "relay"
 
 esp_err_t config_init(void) {
     esp_err_t err = nvs_flash_init();
@@ -184,4 +185,83 @@ void config_set_sleep_s(uint32_t seconds) {
     nvs_set_u32(h, "sleep_s", seconds);
     nvs_commit(h);
     nvs_close(h);
+}
+
+// --- cloud relay ---------------------------------------------------------
+// 32-byte blob helpers (pairing private scalar + derived frame key).
+static bool nvs_get_blob32(const char *ns, const char *key, uint8_t out[32]) {
+    nvs_handle_t h;
+    if (nvs_open(ns, NVS_READONLY, &h) != ESP_OK) return false;
+    size_t l = 32;
+    bool ok = (nvs_get_blob(h, key, out, &l) == ESP_OK && l == 32);
+    nvs_close(h);
+    return ok;
+}
+static void nvs_set_blob32_commit(const char *ns, const char *key, const uint8_t in[32]) {
+    nvs_handle_t h;
+    if (nvs_open(ns, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, key, in, 32);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool config_relay_ready(void) {
+    uint8_t k[32];
+    return config_get_relay_key(k);
+}
+bool config_relay_configured(void) {
+    // Buffers must hold the full stored value: nvs_get_str returns
+    // ESP_ERR_NVS_INVALID_LENGTH (-> 0 here) if the string is longer than the
+    // buffer, which would falsely read a long URL as "unset".
+    char url[160];
+    if (nvs_get_str_or_empty(NS_RELAY, "url", url, sizeof url) == 0) return false;
+    if (config_relay_ready()) return true;
+    char code[40];
+    return nvs_get_str_or_empty(NS_RELAY, "code", code, sizeof code) > 0;
+}
+void config_get_relay_url(char *o, size_t n)   { nvs_get_str_or_empty(NS_RELAY, "url", o, n); }
+void config_set_relay_url(const char *v)       { nvs_set_str_commit(NS_RELAY, "url", v ? v : ""); }
+void config_get_relay_code(char *o, size_t n)  { nvs_get_str_or_empty(NS_RELAY, "code", o, n); }
+void config_set_relay_code(const char *v)      { nvs_set_str_commit(NS_RELAY, "code", v ? v : ""); }
+bool config_get_relay_priv(uint8_t p[32])      { return nvs_get_blob32(NS_RELAY, "priv", p); }
+void config_set_relay_priv(const uint8_t p[32]) { nvs_set_blob32_commit(NS_RELAY, "priv", p); }
+void config_get_relay_install(char *o, size_t n){ nvs_get_str_or_empty(NS_RELAY, "install", o, n); }
+void config_get_relay_device(char *o, size_t n) { nvs_get_str_or_empty(NS_RELAY, "device", o, n); }
+void config_get_relay_token(char *o, size_t n)  { nvs_get_str_or_empty(NS_RELAY, "token", o, n); }
+bool config_get_relay_key(uint8_t k[32])       { return nvs_get_blob32(NS_RELAY, "key", k); }
+void config_get_relay_etag(char *o, size_t n)  { nvs_get_str_or_empty(NS_RELAY, "etag", o, n); }
+void config_set_relay_etag(const char *v)      { nvs_set_str_commit(NS_RELAY, "etag", v ? v : ""); }
+void config_get_relay_config_etag(char *o, size_t n){ nvs_get_str_or_empty(NS_RELAY, "cfg_etag", o, n); }
+void config_set_relay_config_etag(const char *v)    { nvs_set_str_commit(NS_RELAY, "cfg_etag", v ? v : ""); }
+
+void config_set_relay_paired(const char *install, const char *device,
+                             const char *token, const uint8_t key[32]) {
+    nvs_handle_t h;
+    if (nvs_open(NS_RELAY, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "install", install ? install : "");
+    nvs_set_str(h, "device",  device ? device : "");
+    nvs_set_str(h, "token",   token ? token : "");
+    nvs_set_blob(h, "key", key, 32);
+    nvs_erase_key(h, "priv");   // scalar no longer needed once the key exists
+    nvs_commit(h);
+    nvs_close(h);
+}
+void config_clear_relay(void) {
+    nvs_handle_t h;
+    if (nvs_open(NS_RELAY, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+}
+void config_forget_relay_pairing(void) {
+    nvs_handle_t h;
+    if (nvs_open(NS_RELAY, NVS_READWRITE, &h) != ESP_OK) return;
+    static const char *const keys[] = {
+        "code", "priv", "install", "device", "token", "key", "etag", "cfg_etag",
+    };
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
+        nvs_erase_key(h, keys[i]);   // ignore ESP_ERR_NVS_NOT_FOUND
+    nvs_commit(h);
+    nvs_close(h);
+    // "url" deliberately kept.
 }

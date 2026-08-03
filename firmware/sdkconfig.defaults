@@ -37,3 +37,6 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # cookies, fits and works). Raise the cap so a cookie-laden setup POST is accepted.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 CONFIG_HTTPD_MAX_URI_LEN=1024
+# Cloud-relay frame-key derivation: HKDF-SHA256 (RFC 5869). GCM/ECDH/Curve25519
+# are already on; only HKDF was missing. See relay_crypto.c.
+CONFIG_MBEDTLS_HKDF_C=y

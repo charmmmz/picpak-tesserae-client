@@ -16,7 +16,12 @@ idf_component_register(
          "provisioning.c"
          "splash.c"
          "lowbatt.c"
-    INCLUDE_DIRS "."
+         "relay_crypto.c"
+         "relay_wire.c"
+         "relay.c"
+         "vendor/monocypher.c"
+    INCLUDE_DIRS "." "vendor"
     EMBED_FILES "assets/splash_setup.bin" "assets/splash_paired.bin" "assets/splash_lowbatt.bin"
+                "assets/splash_revoked.bin"
     REQUIRES driver nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
              json esp_adc lwip esp_hw_support mqtt)

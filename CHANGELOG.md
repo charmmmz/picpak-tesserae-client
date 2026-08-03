@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+- **Cloud relay transport** (`firmware/main/relay.c`, `relay_crypto.c`, `relay_wire.c`,
+  `vendor/monocypher.c`; `config_store.c`, `provisioning.c`, `main.c`). A mutually-exclusive third
+  transport for a panel that can't reach the Tesserae server directly (another home, CGNAT, a
+  hotspot): both ends connect **outbound** to a mailbox Worker, home seals each frame and the panel
+  polls + decrypts it. **Zero-knowledge** — X25519 public-key exchange at pairing derives an
+  AES-256-GCM frame key on each side (never transmitted); the relay holds only ciphertext. A failed
+  GCM tag is never painted, and the decrypted length is validated against the panel's 30 000-byte
+  frame. Pair it from the setup portal's new **Cloud relay** option (relay URL + a single-use pairing
+  code from *Settings → Cloud relay*); no server URL needed. When paired the device runs the relay
+  cycle (frame fetch → status POST → config sync, adopting `sleep_interval_s`) and skips REST/MQTT
+  entirely; unpaired devices are unchanged. Enables `CONFIG_MBEDTLS_HKDF_C`. Crypto is pinned to the
+  relay contract's golden vectors by `tools/test_relay_crypto.sh` (127 checks). **Hardware-confirmed**
+  end-to-end against the hosted `relay.tesserae.ink` + a NUC home instance: pairing, frame decrypt +
+  paint, telemetry, config adoption, and ETag/304 dedup.
+- **Buttons over relay** (`relay_wire.c` `relay_build_status_body`, `relay.c`, `main.c`; needs
+  **server/relay v0.240.0+**). A relay panel's frame GET terminates at the relay, so the press rides
+  the **status body** instead (`button` + `button_event_id`, emitted together-or-not; id required, home
+  dedups on it). A **tap → deck-next**, a **5 s-hold → refresh** — the same names REST sends, so the
+  server's Button map dispatches them. Delivery is store-and-forward (~30 s first press), so after a
+  press the panel stays awake a fixed window (`RELAY_BUTTON_WINDOW_S`, 45 s) polling the mailbox and
+  painting home's rendered response when it arrives. **The manual-deck-over-relay limitation is
+  lifted.** On an older server the button fields are ignored (harmless). Hardware-confirmed. The
+  status-body button contract is host-tested (`tools/test_relay_crypto.sh`, now 147 checks).
+
+### Fixed
+- **Relay frame/config repainted every wake** (`firmware/main/relay.c`). `relay_get_sealed` read the
+  response ETag with `esp_http_client_get_header()`, which returns only *request* headers — so the
+  ETag was never captured (`etag (none)`), no `If-None-Match` was ever sent, and every wake got a
+  `200` + full ~20 s repaint of the same frame (and re-applied config). Capture the ETag via the
+  `HTTP_EVENT_ON_HEADER` event instead (matching `rest_handler.c`); unchanged frames now `304`.
+  Hardware-confirmed.
+- **Relay device delete / re-add + auto revoke-recovery** (`provisioning.c`, `relay.c`, `main.c`,
+  `config_store.c`). Re-provisioning a relay device with a new pairing code clears the old pairing
+  first, so it re-pairs cleanly — a stale frame key previously blocked re-pairing (a factory reset was
+  the only recourse). And on **server/relay v0.240.0+**, a revoke deletes the device token, so a `401`
+  from any device-token route is unambiguous: **two consecutive `401` wakes** (`note_auth` +
+  `s_auth_fail_streak` in RTC) trip `relay_pairing_revoked()` → the panel forgets the pairing (keeps
+  the relay URL via `config_forget_relay_pairing`), paints a dedicated **"Unpaired" splash**
+  (`splash_show_revoked`), and re-pairs on a fresh code via the 20 s-hold portal (URL pre-filled). Two
+  wakes, not one, so a captive-portal/middlebox `401` can't unpair a working panel; a `204` (nothing
+  published yet) never triggers it. Superseded the earlier single-401 immediate wipe. Hardware-confirmed.
+
+### Changed
+- **Relay setup portal hides the device-id field** (`provisioning.c`). The device id is ignored on
+  relay (identity comes from pairing / the server's *Add a remote panel* slot), so the Device card
+  is hidden when the transport is **CLOUD RELAY**; REST/MQTT unchanged.
+- **Portal polish** (`provisioning.c`): a **blank Relay URL now defaults** to the hosted
+  `https://relay.tesserae.ink` (matching the field's hint — previously an empty URL was rejected).
+- `FW_VERSION` bumped `0.8.2` → `0.9.0`.
+
+## 0.8.2
+
+### Added
+- **Button-tap deck navigation** (`firmware/main/rest_button.h`, `power.c`, `rest_handler.c`,
+  `main.c`). A **brief button hold at wake (~0.5 s — anything under the refresh threshold)** now
+  advances the device to the **next page of its bound Deck** in Tesserae: the wake sends
+  `GET /frame?button=right`, which the server turns into a deck next-page navigation and serves the
+  pre-warmed frame. A **quick tap** (press-and-release) is unchanged — it just wakes and checks for
+  a new photo, so a directly-pushed image still comes through. Unlike the refresh gesture, a deck-next
+  keeps its `If-None-Match` ETag, so it stays a superset of a plain wake (a no-op `304` when there is
+  no Deck bound). REST transport only; on MQTT the gesture is logged and ignored.
+
+### Changed
+- **Force-refresh hold raised 3 s → 5 s** (`firmware/main/defaults.h`, `BTN_REFRESH_HOLD_MS`). Holding
+  the button now requests a refresh at **~5 s** (was ~3 s); the status-LED "refresh armed" steady-on
+  point and the low-battery force-resume override move with it (both key off the same refresh gesture).
+  This widens the sub-5 s window used by the new deck-next tap. The ~20 s provisioning hold is
+  unchanged.
+- `FW_VERSION` bumped `0.8.1` → `0.8.2`.
+
 ## 0.8.1
 
 ### Fixed

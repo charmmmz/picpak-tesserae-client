@@ -45,6 +45,33 @@ void config_set_transport(uint8_t mode);                    // 0=MQTT, 1=REST
 uint8_t config_get_transport(uint8_t fallback);
 void config_set_pairing_code(const char *code);
 void config_get_pairing_code(char *out, size_t out_sz);   // empty if none set
+
+// --- cloud relay (mutually-exclusive third transport) ---
+// Stored in a dedicated "relay" NVS namespace. A relay-paired device holds a
+// frame key and talks only to the relay mailbox; see relay.c.
+bool config_relay_ready(void);        // frame key present
+bool config_relay_configured(void);   // url set && (ready || pairing code set)
+void config_get_relay_url(char *out, size_t out_sz);
+void config_set_relay_url(const char *url);
+void config_get_relay_code(char *out, size_t out_sz);
+void config_set_relay_code(const char *code);
+bool config_get_relay_priv(uint8_t priv[32]);      // false if absent
+void config_set_relay_priv(const uint8_t priv[32]);
+void config_set_relay_paired(const char *install, const char *device,
+                             const char *token, const uint8_t key[32]);
+void config_get_relay_install(char *out, size_t out_sz);
+void config_get_relay_device(char *out, size_t out_sz);
+void config_get_relay_token(char *out, size_t out_sz);
+bool config_get_relay_key(uint8_t key[32]);        // false if absent
+void config_get_relay_etag(char *out, size_t out_sz);
+void config_set_relay_etag(const char *etag);
+void config_get_relay_config_etag(char *out, size_t out_sz);
+void config_set_relay_config_etag(const char *etag);
+void config_clear_relay(void);        // erase all relay state
+// Drop the pairing (code, priv, ids, token, frame key, etags) but KEEP the relay
+// url — used on a confirmed revoke so re-pairing pre-fills the URL. After this,
+// config_relay_ready()/configured() are false until a fresh code re-pairs.
+void config_forget_relay_pairing(void);
 void config_set_mqtt(const char *uri, const char *user, const char *pass);  // blank/NULL pass keeps existing
 // MQTT broker config (NVS -> secrets -> ""). All outputs always NUL-terminated.
 void config_get_mqtt(char *uri, size_t uri_sz, char *user, size_t user_sz,

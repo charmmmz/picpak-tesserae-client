@@ -10,7 +10,7 @@ Modelled on Tesserae's battery-native reference client
 but retargeted to the PicPak's hardware: a smaller 4-colour panel, an ESP32-C3 (RISC-V) instead of an
 S3, no PMIC (battery is read straight off an ADC), and a 2-bits-per-pixel frame format.
 
-> **Status:** working end-to-end over REST and MQTT on real hardware. `FW_VERSION 0.8.1`.
+> **Status:** working end-to-end over REST, MQTT, and cloud relay on real hardware. `FW_VERSION 0.9.0`.
 > See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 > Tested on PicPak **hardware revision v0.0.1**, migrating from **official firmware v1.1.11**
 > to this firmware and back (stock restore verified).
@@ -34,7 +34,7 @@ S3, no PMIC (battery is read straight off an ADC), and a 2-bits-per-pixel frame 
 | Panel power | AXP2101 PMIC | direct (no PMIC) |
 | Battery sense | AXP2101 fuel gauge (I²C) | **ADC1 ch2 (GPIO2)** + ×1.45 divider, curve-fit calibrated |
 | User button | BOOT hold + RESET double-tap | **single button (GPIO2, shared with the battery ADC)** |
-| Transport | MQTT + REST | **MQTT + REST** (REST is the recommended default) |
+| Transport | MQTT + REST | **MQTT + REST + cloud relay** (REST is the recommended default; relay is for remote panels) |
 
 **Pin map** (`firmware/main/board.h`): EPD `SCLK 6 · MOSI 3 · MISO 4 · CS 9 · DC 8 · RST 10 · BUSY 20`
 (SPI @ 1 MHz); button `GPIO2` (active-low, shared with the battery ADC). The board also carries an
@@ -140,14 +140,23 @@ vendor's update/OTA tools stop recognizing the device until you restore stock �
 ### Step 3 — First boot: the setup portal
 
 WiFi + server come from an on-device **SoftAP captive portal** (`firmware/main/provisioning.c`) — no
-recompiling. Two triggers:
+recompiling. It opens automatically when there are no usable creds at boot (empty NVS + empty
+`secrets.h`), or on demand via the ~20 s button hold below.
 
-- **No usable creds at boot** (empty NVS + empty `secrets.h`) → portal auto-starts.
-- **Hold the button ~20 s at wake** → portal (deliberate re-provision). A **~3 s hold** requests a
-  refresh — the server re-renders the current frame with fresh data (when the device is driven by a
-  rotation) and it repaints; a quick tap just wakes and checks for a new frame. (REST transport only.)
+The frame's **single button** is classified by how long you hold it at wake (deck-next and refresh
+are **REST transport only**):
+
+- **Quick tap** — a plain press-and-release → wakes now and checks the server for a new photo. This
+  is the "just show me the latest" press: nothing is navigated, and a directly-pushed image comes
+  through as normal.
+- **Brief hold (~0.5 s — anything held under 5 s)** → flips to the **next page of the device's Deck**
+  in Tesserae (manual deck navigation; the wake sends `?button=right`). Needs a Deck bound to the
+  device; with none it is a harmless no-op that behaves like a quick tap.
+- **Hold ~5 s** → **force refresh**: the server re-renders the current page with fresh data and the
+  frame repaints. This is also the deliberate override that resumes a battery-locked device.
+- **Hold ~20 s** → reopens the setup portal (deliberate re-provision of WiFi/server).
 - **Status LED** (`firmware/main/led.{c,h}`, GPIO21). Screen-free status: **one blink on every wake**
-  (timer or button); while holding the button the feedback steps off → **steady-on** past the ~3 s
+  (timer or button); while holding the button the feedback steps off → **steady-on** past the ~5 s
   refresh point → **rapid burst** at the ~20 s provisioning point, so you can feel the timing without
   watching the panel. The console runs on USB-Serial-JTAG (`/dev/cu.usbmodem*`), so GPIO21 — which is
   also the UART0 TX pin — carries no log traffic and is a clean, dedicated LED.
@@ -229,6 +238,38 @@ only carries the signalling and telemetry.
 | --- | --- |
 | `1` REST (default, recommended) | **working** — device polls the Tesserae REST API each wake; no broker needed |
 | `0` MQTT | **working** — device reads a retained frame topic from an MQTT broker each wake; needs a broker (e.g. Mosquitto) reachable by both the server and the frame |
+| Cloud relay | **new** — for a panel that can't reach your Tesserae server directly (another home, CGNAT, a hotspot). Mutually exclusive with REST/MQTT: when a relay is paired the device talks only to the relay. See below. |
+
+### Cloud relay (remote panels)
+
+A relay panel and your home Tesserae instance both connect **outbound** to a small mailbox Worker;
+home seals each rendered frame and `PUT`s it, the panel polls and decrypts it — so the home server is
+never exposed to the internet. The relay is **zero-knowledge**: at pairing the two ends exchange
+X25519 **public** keys through it and each derive the same AES-256-GCM frame key locally (the key is
+never transmitted), so the relay only ever holds ciphertext, two public keys and a token hash. A
+failed authentication tag is never painted. Frame crypto is in `firmware/main/relay_crypto.c` (X25519
+via vendored Monocypher, HKDF-SHA256 + AES-GCM via mbedTLS), pinned to the relay contract's golden
+vectors by `tools/test_relay_crypto.sh`.
+
+**Provisioning:** in the setup portal pick **Cloud relay**, enter the relay URL (defaults to the
+hosted `https://relay.tesserae.ink`) and a single-use pairing code from your Tesserae server
+(*Settings → Cloud relay → Add a remote panel*). No server URL is needed. Pairing may take a couple of
+wakes to complete; after that each wake fetches the current frame, posts telemetry, and adopts the
+server-set sleep interval — the same status body the Devices UI shows for a local device.
+
+**Removing or re-pairing:** to retire a relay panel, use the per-device **Remove** button on
+*Settings → Cloud relay* (it revokes the relay mailbox and deletes the device). To move a panel to a
+fresh pairing — or to recover a deleted/re-added one — reopen setup (20 s button hold) and enter a
+new pairing code; the panel drops its old pairing and re-pairs cleanly (no factory reset needed). The
+device-id field is hidden on relay, since a relay panel's identity comes from pairing, not that field.
+
+**Button gestures work over relay on Tesserae server/relay v0.240.0+.** The press rides the status
+body (`button`+`button_event_id`); a tap navigates the deck (`right`) and a 5 s-hold refreshes.
+Because relay delivery is store-and-forward, the panel stays awake ~45 s after a press, polling for
+home's rendered response (~30 s for the first press) and painting it. On an older server the button
+fields are ignored (harmless). MQTT remains button-less (push-only transport). *(A revoked panel also
+auto-recovers on v0.240.0+: two consecutive `401` wakes → the panel drops its pairing, paints an
+**"Unpaired"** screen, and re-pairs on a fresh code via the 20 s-hold portal, URL pre-filled.)*
 
 ### Frame format
 
@@ -253,7 +294,7 @@ precedes the paint by its 13–22 s duration):
   "battery_pct": 96,
   "rssi": -63,
   "ip": "10.0.20.40",
-  "fw_version": "0.8.1",
+  "fw_version": "0.9.0",
   "kind": "picpak_client",
   "panel_w": 400,
   "panel_h": 300,

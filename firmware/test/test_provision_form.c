@@ -76,6 +76,18 @@ int main(void) {
     assert(!provform_device_id_valid("pic.pak"));           // no dots
     assert(!provform_device_id_valid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")); // 33 chars > 32
 
+    // Relay URL reuses the server-URL normalizer: bare host gets http://, an
+    // https URL passes through (trailing slash trimmed), empty rejected.
+    char ru[192];
+    strcpy(ru, "relay.tesserae.ink");
+    assert(provform_normalize_server_url(ru, sizeof ru) == PROVFORM_URL_OK
+           && strcmp(ru, "http://relay.tesserae.ink") == 0);
+    strcpy(ru, "https://relay.tesserae.ink/");
+    assert(provform_normalize_server_url(ru, sizeof ru) == PROVFORM_URL_OK
+           && strcmp(ru, "https://relay.tesserae.ink") == 0);
+    strcpy(ru, "");
+    assert(provform_normalize_server_url(ru, sizeof ru) == PROVFORM_URL_EMPTY);
+
     printf("PASS\n");
     return 0;
 }
