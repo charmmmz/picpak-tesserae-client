@@ -1,5 +1,10 @@
 # picpak-tesserae-client
 
+**In plain terms:** this replaces the stock firmware on the PicPak photo frame so it shows photos
+from *your own* self-hosted [Tesserae](https://github.com/dmellok/tesserae) server instead of the
+vendor's cloud — no vendor account, no subscription. You flash it once, tell the frame your WiFi and
+server on a phone setup screen, and it fetches a new picture on its own schedule.
+
 Battery-powered **ESP32-C3** firmware that turns the **PicPak** 4.2" e-paper photo frame into an
 embedded client for the [Tesserae](https://github.com/dmellok/tesserae) server. On each wake it
 connects to WiFi, pulls the current dashboard frame over REST or MQTT, paints the panel, reports a
@@ -42,6 +47,17 @@ LSM6 IMU (`CS 7 · INT 5`), unused by this firmware. Cell: single-cell Li-Po, 3.
 
 ## Installing the firmware
 
+**Quick start (the happy path):**
+
+1. **Back up** the stock firmware from the command line — your only way back to factory. *This is the
+   one slow, one-time step (~1.5–2 hours of unattended reading); everything after it is quick.*
+2. **Flash** this firmware — easiest from the browser at
+   <https://picpaktesserae.pages.dev> (Chrome/Edge), about two minutes.
+3. **Set up** WiFi + server on the frame's own **`Tesserae-Setup`** WiFi screen from your phone.
+
+The rest of this section is the detailed version of those three steps, with the command-line
+alternatives and every warning worth reading first.
+
 Three steps: **back up** the stock firmware, **flash** the release build, **set up** via the
 on-device portal.
 
@@ -60,34 +76,46 @@ show Secure Boot and Flash Encryption disabled before you proceed.
 
 ### Step 1 — Back up the stock firmware (required)
 
+> This is the long, one-time step: a couple of hours of the computer reading the chip by itself,
+> and you never repeat it. The actual firmware flashing afterwards takes about two minutes.
+
 **You cannot re-download the stock firmware — the backup is your only way back.** This step is
 **command line only** — the browser flasher can *write* firmware but cannot *read* a full image,
 so it can't make a backup. You need `esptool`.
 
-#### Install esptool — pick the easiest for your platform
+#### Install esptool — one recommended way per platform
 
-The truly no-Python option on every OS: grab the **standalone binary** from
-[esptool releases](https://github.com/espressif/esptool/releases) (`esptool-*-macos*.zip`,
-`esptool-*-windows-amd64.zip`, or `esptool-*-linux-amd64.zip`), unzip it, and run the
-`esptool`/`esptool.exe` binary directly — no install, no Python. Otherwise:
+`esptool` is the small tool that reads and writes the frame's memory. Install it once. **Pick the
+one line for your computer and ignore the others:**
 
-- **macOS** — `brew install esptool` (Homebrew bundles its own Python; a plain
-  `pip install esptool` into Homebrew's Python fails with `externally-managed-environment`).
-  Then use the command as `esptool.py …`.
-- **Windows** — install [Python](https://python.org/downloads) (**tick "Add python.exe to
-  PATH"**), then `pip install esptool`. Windows Python has no `externally-managed` restriction,
-  so this just works. Use `py -m pip …` / `py -m esptool …` if `python` isn't found.
-- **Linux** — `pipx install esptool` (or your distro's package, e.g. `apt install esptool`).
-  A distro-managed Python will also reject bare `pip install`, so prefer `pipx`.
+- **macOS** — run `brew install esptool`
+- **Windows** — install [Python](https://python.org/downloads) (**tick "Add python.exe to PATH"**
+  during setup), then run `pip install esptool`
+- **Linux** — run `pipx install esptool` (or your distro's package, e.g. `apt install esptool`)
 
-Depending on how you installed it, the command name differs — all forms are interchangeable
-with the `python -m esptool …` shown below:
+After that, **your command is `esptool.py`**. This guide writes every command as
+`python -m esptool …`; wherever you see that, just type **`esptool.py`** instead — it is the exact
+same tool. For example, `python -m esptool --chip esp32c3 …` becomes `esptool.py --chip esp32c3 …`.
 
-- **Homebrew / pipx / Linux package** — `esptool.py …`
-- **Standalone binary** — `./esptool …` (macOS/Linux) or `esptool.exe …` (Windows), run from the
-  unzipped folder
-- **pip into your own Python** — `python -m esptool …` (or `py -m esptool …` on Windows if
-  `python` isn't found)
+<details>
+<summary><b>Didn't work, or want no Python at all? Other install methods & command names</b></summary>
+
+- **Standalone binary (no Python needed)** — grab it from
+  [esptool releases](https://github.com/espressif/esptool/releases) (`esptool-*-macos*.zip`,
+  `esptool-*-windows-amd64.zip`, or `esptool-*-linux-amd64.zip`), unzip, and run the binary
+  directly. The command name is then `./esptool` (macOS/Linux) or `esptool.exe` (Windows), run
+  from the unzipped folder.
+- **macOS note** — Homebrew bundles its own Python; a plain `pip install esptool` into Homebrew's
+  Python fails with `externally-managed-environment`, which is why `brew install esptool` is
+  recommended above.
+- **Windows note** — Windows Python has no `externally-managed` restriction, so `pip install`
+  just works. If `python` isn't found, use `py -m pip …` and `py -m esptool …`.
+- **Linux note** — a distro-managed Python also rejects a bare `pip install`, so prefer `pipx`.
+
+All of these are the same tool; `esptool.py`, `python -m esptool`, `./esptool`, and `esptool.exe`
+are interchangeable in every command below.
+
+</details>
 
 #### Find your `<PORT>`
 
@@ -100,12 +128,22 @@ time's name.
 
 #### Run the backup — read the lower 16 MB with `--no-stub`
 
+> ⚠️ **`<PORT>` is a placeholder — don't paste it literally.** Replace it with your actual port from
+> the step just above (e.g. `/dev/cu.usbmodem1101` on a Mac, `/dev/ttyACM0` on Linux, `COM5` on
+> Windows). If you leave `<PORT>` in, the command fails.
+
 ```sh
 # backup — run it TWICE, into two files
-# (replace <PORT>; swap "python -m esptool" for your command name from the list above —
-#  e.g. esptool.py, ./esptool, or esptool.exe on Windows)
+# (replace <PORT> with your port; if you installed esptool the recommended way, type
+#  "esptool.py" instead of "python -m esptool")
 python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
 python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_2.bin
+```
+
+**What a finished command looks like** (Mac, port `/dev/cu.usbmodem1101`, esptool installed via brew):
+
+```sh
+esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
 ```
 
 #### Verify — the two hashes must be identical
@@ -163,10 +201,17 @@ Ports (COM & LPT) — use `COM<x>`). List it with `ls /dev/cu.usbmodem*`. The nu
 USB port/hub position, so it **changes when you replug into a different port** — re-check it
 rather than assuming last time's name.
 
-First install — all-in-one image:
+First install — all-in-one image (again, **replace `<PORT>`** with your real port, and use
+`esptool.py` if that's how you installed it):
 
 ```sh
 python -m esptool --chip esp32c3 -p <PORT> -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 picpak-tesserae-firmware.bin
+```
+
+**Finished example** (Mac, port `/dev/cu.usbmodem1101`):
+
+```sh
+esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 picpak-tesserae-firmware.bin
 ```
 
 Same install from the individual files (use this form **when upgrading**, leaving out
