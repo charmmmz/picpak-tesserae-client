@@ -79,7 +79,7 @@ ESP32-C3's security eFuses are **not burned** — no Secure Boot, no Flash Encry
 download mode unlocked — which is what makes the backup, this firmware, and a later stock
 restore possible at all. eFuses are one-time-programmable: if the manufacturer ever ships
 units (or an update that burns fuses) with these protections enabled, none of this will
-work. If unsure, check first — `python -m espefuse --chip esp32c3 -p <PORT> summary` should
+work. If unsure, check first — `espefuse.py --chip esp32c3 -p <PORT> summary` should
 show Secure Boot and Flash Encryption disabled before you proceed.
 
 ### Step 1 — Back up the stock firmware (required)
@@ -101,9 +101,9 @@ one line for your computer and ignore the others:**
   during setup), then run `pip install esptool`
 - **Linux** — run `pipx install esptool` (or your distro's package, e.g. `apt install esptool`)
 
-After that, **your command is `esptool.py`**. This guide writes every command as
-`python -m esptool …`; wherever you see that, just type **`esptool.py`** instead — it is the exact
-same tool. For example, `python -m esptool --chip esp32c3 …` becomes `esptool.py --chip esp32c3 …`.
+After that, **your command is `esptool.py`** — which is exactly how every command in this guide is
+written, so you can copy them as-is (just fill in your port). On Windows, if `esptool.py` isn't
+found, use `py -m esptool` with the same arguments.
 
 <details>
 <summary><b>Didn't work, or want no Python at all? Other install methods & command names</b></summary>
@@ -141,11 +141,9 @@ time's name.
 > Windows). If you leave `<PORT>` in, the command fails.
 
 ```sh
-# backup — run it TWICE, into two files
-# (replace <PORT> with your port; if you installed esptool the recommended way, type
-#  "esptool.py" instead of "python -m esptool")
-python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
-python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_2.bin
+# backup — run it TWICE, into two files (replace <PORT> with your port)
+esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
+esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_2.bin
 ```
 
 **What a finished command looks like** (Mac, port `/dev/cu.usbmodem1101`, esptool installed via brew):
@@ -209,24 +207,18 @@ Ports (COM & LPT) — use `COM<x>`). List it with `ls /dev/cu.usbmodem*`. The nu
 USB port/hub position, so it **changes when you replug into a different port** — re-check it
 rather than assuming last time's name.
 
-First install — all-in-one image (again, **replace `<PORT>`** with your real port, and use
-`esptool.py` if that's how you installed it):
+First install — all-in-one image (**replace `<PORT>`** with your real port, e.g.
+`/dev/cu.usbmodem1101`):
 
 ```sh
-python -m esptool --chip esp32c3 -p <PORT> -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 picpak-tesserae-firmware.bin
-```
-
-**Finished example** (Mac, port `/dev/cu.usbmodem1101`):
-
-```sh
-esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 picpak-tesserae-firmware.bin
+esptool.py --chip esp32c3 -p <PORT> -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 picpak-tesserae-firmware.bin
 ```
 
 Same install from the individual files (use this form **when upgrading**, leaving out
 `0x9000 nvs_blank.bin` to keep your saved settings — the all-in-one image always wipes them):
 
 ```sh
-python -m esptool --chip esp32c3 -p <PORT> -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 bootloader.bin 0x8000 partition-table.bin 0x9000 nvs_blank.bin 0x10000 picpak-tesserae-client.bin
+esptool.py --chip esp32c3 -p <PORT> -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 bootloader.bin 0x8000 partition-table.bin 0x9000 nvs_blank.bin 0x10000 picpak-tesserae-client.bin
 ```
 
 If the connection drops or fails to sync, use a different USB-C **data** cable and a direct
@@ -300,7 +292,7 @@ hardware-verified**:
 - **esptool with `--no-stub`**:
 
   ```sh
-  python -m esptool --chip esp32c3 -p <PORT> --no-stub write_flash --flash_size 16MB 0x0 stock_backup_1.bin
+  esptool.py --chip esp32c3 -p <PORT> --no-stub write_flash --flash_size 16MB 0x0 stock_backup_1.bin
   ```
 
   Unlike the backup, the restore is **fast — about 5–10 minutes total**. It starts with a
@@ -319,7 +311,7 @@ Only for a device already running this Tesserae custom firmware: wipes its saved
 WiFi/server/pairing but keeps the firmware — the device comes back up in the setup portal:
 
 ```sh
-python -m esptool --chip esp32c3 -p <PORT> erase_region 0x9000 0x6000
+esptool.py --chip esp32c3 -p <PORT> erase_region 0x9000 0x6000
 ```
 
 **Do not run this on a device still running the stock firmware** — there the same flash region
@@ -330,9 +322,10 @@ that data irrecoverably unless you have your full stock backup.
 
 ### Transport modes
 
-Both transports work; pick one in the captive portal (stored in NVS, switchable any time by
-re-provisioning). Frame **bytes** are always fetched over HTTP(S) from a URL — the transport
-only carries the signalling and telemetry.
+All three transports work; pick one in the captive portal (stored in NVS, switchable any time by
+re-provisioning). In **REST** and **MQTT** the frame **bytes** are fetched over HTTP(S) from a URL
+and the transport only carries the signalling and telemetry; the **cloud relay** instead carries the
+(encrypted) frame itself through its mailbox — see [Cloud relay](#cloud-relay-remote-panels).
 
 | Mode | Status |
 | --- | --- |
@@ -449,11 +442,12 @@ under Tesserae's **Settings → Devices** for the admin to claim. The session ca
 subscribers without ever clobbering the retained heartbeat. Wakes that find the broker down keep
 the last image and retry on the next cycle — the frame never blanks.
 
-Three panel screens (baked 2 bpp blobs, generated by `tools/gen_splash.py`, embedded via CMake):
+Four panel screens (baked 2 bpp blobs, generated by `tools/gen_splash.py`, embedded via CMake):
 
 - **Setup** — logo + `Tesserae-Setup` / `tesserae` — shown when the portal comes up so you can join.
 - **Paired** — "Connected — waiting for first frame" — once after you submit, until the first photo.
 - **Battery low** — "please charge" — shown by the low-battery gate.
+- **Unpaired** — shown when a relay panel's pairing is revoked (see [Cloud relay](#cloud-relay-remote-panels)), until you re-pair with a fresh code.
 
 ### Power notes
 
