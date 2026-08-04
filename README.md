@@ -60,17 +60,63 @@ show Secure Boot and Flash Encryption disabled before you proceed.
 
 ### Step 1 — Back up the stock firmware (required)
 
-**You cannot re-download the stock firmware — the backup is your only way back.** Read the
-**lower 16 MB** of the flash with `--no-stub`:
+**You cannot re-download the stock firmware — the backup is your only way back.** This step is
+**command line only** — the browser flasher can *write* firmware but cannot *read* a full image,
+so it can't make a backup. You need `esptool`.
+
+#### Install esptool — pick the easiest for your platform
+
+The truly no-Python option on every OS: grab the **standalone binary** from
+[esptool releases](https://github.com/espressif/esptool/releases) (`esptool-*-macos*.zip`,
+`esptool-*-windows-amd64.zip`, or `esptool-*-linux-amd64.zip`), unzip it, and run the
+`esptool`/`esptool.exe` binary directly — no install, no Python. Otherwise:
+
+- **macOS** — `brew install esptool` (Homebrew bundles its own Python; a plain
+  `pip install esptool` into Homebrew's Python fails with `externally-managed-environment`).
+  Then use the command as `esptool.py …`.
+- **Windows** — install [Python](https://python.org/downloads) (**tick "Add python.exe to
+  PATH"**), then `pip install esptool`. Windows Python has no `externally-managed` restriction,
+  so this just works. Use `py -m pip …` / `py -m esptool …` if `python` isn't found.
+- **Linux** — `pipx install esptool` (or your distro's package, e.g. `apt install esptool`).
+  A distro-managed Python will also reject bare `pip install`, so prefer `pipx`.
+
+Depending on how you installed it, the command name differs — all forms are interchangeable
+with the `python -m esptool …` shown below:
+
+- **Homebrew / pipx / Linux package** — `esptool.py …`
+- **Standalone binary** — `./esptool …` (macOS/Linux) or `esptool.exe …` (Windows), run from the
+  unzipped folder
+- **pip into your own Python** — `python -m esptool …` (or `py -m esptool …` on Windows if
+  `python` isn't found)
+
+#### Find your `<PORT>`
+
+- **macOS** — `ls /dev/cu.usbmodem*` (e.g. `/dev/cu.usbmodem1101`).
+- **Linux** — `ls /dev/ttyACM*` (e.g. `/dev/ttyACM0`).
+- **Windows** — Device Manager → Ports (COM & LPT) → **"USB Serial Device (COMx)"**; use `COM<x>`.
+
+The number changes when you replug into a different USB port — re-check rather than reusing last
+time's name.
+
+#### Run the backup — read the lower 16 MB with `--no-stub`
 
 ```sh
 # backup — run it TWICE, into two files
+# (replace <PORT>; swap "python -m esptool" for your command name from the list above —
+#  e.g. esptool.py, ./esptool, or esptool.exe on Windows)
 python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
 python -m esptool --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_2.bin
-
-# the two hashes must be identical — only then trust the backup
-shasum -a 256 stock_backup_1.bin stock_backup_2.bin
 ```
+
+#### Verify — the two hashes must be identical
+
+A raw `read_flash` has no error check, so two matching reads is the only proof the backup is good.
+
+- **macOS / Linux** — `shasum -a 256 stock_backup_1.bin stock_backup_2.bin`
+- **Windows (PowerShell)** — `Get-FileHash stock_backup_1.bin, stock_backup_2.bin -Algorithm SHA256`
+- **Windows (Command Prompt)** — `certutil -hashfile stock_backup_1.bin SHA256` (repeat for file 2)
+
+Only trust the backup once both hashes match.
 
 **Why 16 MB when the chip says 32?** The flash identifies itself as 32 MB, but full 32 MB
 dumps (taken twice on real hardware and compared) show the upper half reads back as a
@@ -87,8 +133,7 @@ chunks, so **expect a long wait — roughly 1.5–2 hours per read**; a higher b
 help (this board's native USB ignores it). Keep the frame plugged in and prevent your
 computer from sleeping.
 
-A raw `read_flash` has no built-in error check, so two independent reads matching is what
-proves the backup is good. Keep one file and its checksum somewhere safe. The backup is
+Keep one file and its checksum somewhere safe. The backup is
 **per-device**: the stock settings region at `0x9000` holds factory data unique to your unit
 (serial number, radio calibration), and the first flash of this firmware overwrites it —
 someone else's backup or a shared stock image cannot fully restore your frame.
@@ -97,10 +142,12 @@ someone else's backup or a shared stock image cannot fully restore your frame.
 
 > **Easiest: flash from the browser — <https://picpaktesserae.pages.dev>** (Chrome or Edge).
 > Fresh install or a settings-keeping update, plus a read-only serial monitor — no tools to
-> install. The esptool commands below do the same from the command line.
+> install. (Flashing only — the browser can't make the Step 1 backup.) The esptool commands
+> below do the same flashing from the command line.
 
 Each [release](../../releases) ships an all-in-one image, its four component files, and
-`SHA256SUMS`; for the command-line route only esptool is needed (`pip install esptool`):
+`SHA256SUMS`; for the command-line route you need esptool — see
+[Step 1](#step-1--back-up-the-stock-firmware-required) for the per-platform install:
 
 | File | Flash offset | |
 | --- | --- | --- |
@@ -397,29 +444,34 @@ Three panel screens (baked 2 bpp blobs, generated by `tools/gen_splash.py`, embe
 
 ```
 picpak-tesserae-client/
-├── firmware/
+├── firmware/                     # ESP-IDF app for the ESP32-C3
 │   ├── CMakeLists.txt · partitions.csv · sdkconfig.defaults
 │   └── main/
-│       ├── main.c              # wake loop: boot → gesture/provision → gates → wifi → fetch → heartbeat → radio off → paint → sleep
-│       ├── board.h · defaults.h # pin map + compile-time tunables (secrets.h optional override)
-│       ├── epd_driver.{c,h}     # 400×300 BWRY UC81xx panel driver + init sequence
-│       ├── fb2bpp.{c,h}         # 2 bpp framebuffer packer (+ host test)
-│       ├── power.{c,h}          # battery ADC, deep sleep, boot-button gesture
-│       ├── battpct.h            # pure mV→% Li-Po curve (host-tested)
-│       ├── lowbatt*.{c,h}       # low-battery gate (pure FSM + RTC glue)
-│       ├── config_store.{c,h}   # NVS config (creds, token, etag, broker, sleep) with secrets.h fallback
-│       ├── wifi_manager.{c,h}   # STA connect (+ SNTP helper for MQTT-mode clock sanity)
-│       ├── provisioning*.{c,h}  # SoftAP captive portal + pure form parser
-│       ├── splash.{c,h}         # embedded setup / paired / low-batt screens
-│       ├── image_fetcher.{c,h}  # HTTP frame download
-│       ├── framebuf.{c,h}       # 30 KB frame staging buffer shared by both transports
-│       ├── rest_handler.{c,h}   # REST: discover/register + frame GET + status POST
-│       ├── mqtt_handler.{c,h}   # MQTT: retained frame/config read + heartbeat publish, one session
-│       ├── mqtt_parse.{c,h}     # pure payload/URI helpers (+ host test)
-│       └── heartbeat.{c,h}      # battery / RSSI / IP / panel JSON
-├── tools/
-│   ├── gen_splash.py            # generate the 2 bpp splash blobs
-└── LICENSE                      # AGPL-3.0
+│       ├── main.c                # wake loop: boot → gesture/provision → gates → wifi → fetch → heartbeat → radio off → paint → sleep
+│       ├── board.h · defaults.h  # pin map + compile-time tunables
+│       ├── secrets.example.h     # template for baked-in creds/broker
+│       ├── epd_driver.{c,h} · epd_init_seq.h   # 400×300 BWRY UC81xx panel driver + init sequence
+│       ├── fb2bpp.{c,h}          # 2 bpp framebuffer packer (+ host test)
+│       ├── framebuf.{c,h}        # 30 KB frame staging buffer shared by all transports
+│       ├── power.{c,h}           # battery ADC, deep sleep, boot-button gesture
+│       ├── battpct.h             # pure mV→% Li-Po curve (host-tested)
+│       ├── lowbatt.{c,h} · lowbatt_core.h      # low-battery gate (pure FSM + RTC glue)
+│       ├── led.{c,h}             # status LED (GPIO21) blink / hold-progression feedback
+│       ├── config_store.{c,h}    # NVS config (creds, token, etag, broker, sleep)
+│       ├── wifi_manager.{c,h}    # STA connect (+ SNTP helper for MQTT-mode clock sanity)
+│       ├── provisioning.{c,h} · provision_form.{c,h}   # SoftAP captive portal + pure form parser
+│       ├── splash.{c,h} · assets/splash_*.bin  # embedded setup / paired / low-batt / revoked screens
+│       ├── image_fetcher.{c,h}   # HTTP frame download
+│       ├── rest_handler.{c,h} · rest_button.h  # REST: discover/register + frame GET + status POST (+ button/deck dispatch)
+│       ├── mqtt_handler.{c,h}    # MQTT: retained frame/config read + heartbeat publish, one session
+│       ├── mqtt_parse.{c,h}      # pure payload/URI helpers (+ host test)
+│       ├── relay.{c,h} · relay_crypto.{c,h} · relay_wire.{c,h}   # cloud-relay transport (X25519 + AES-GCM remote panels)
+│       ├── vendor/monocypher.{c,h}             # vendored crypto for the relay transport
+│       └── heartbeat.{c,h}       # battery / RSSI / IP / panel JSON
+├── tools/                        # gen_splash.py (splash blobs)
+├── CHANGELOG.md
+├── README.md
+└── LICENSE                       # AGPL-3.0
 ```
 
 ## Disclaimer
