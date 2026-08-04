@@ -5,10 +5,10 @@ from *your own* self-hosted [Tesserae](https://github.com/dmellok/tesserae) serv
 vendor's cloud — no vendor account, no subscription. You flash it once, tell the frame your WiFi and
 server on a phone setup screen, and it fetches a new picture on its own schedule.
 
-Battery-powered **ESP32-C3** firmware that turns the **PicPak** 4.2" e-paper photo frame into an
-embedded client for the [Tesserae](https://github.com/dmellok/tesserae) server. On each wake it
-connects to WiFi, pulls the current dashboard frame over REST or MQTT, paints the panel, reports a
-heartbeat (battery, RSSI), and deep-sleeps.
+**Under the hood:** it's battery-powered firmware for the frame's **ESP32-C3**. Most of the time the
+device is in deep sleep; on each scheduled wake it connects to WiFi, pulls the current frame from
+Tesserae (over REST, MQTT, or cloud relay), paints the e-paper panel, reports a heartbeat (battery,
+RSSI), and goes back to sleep.
 
 Modelled on Tesserae's battery-native reference client
 [tesserae-device-photopainter-7.3-bin](https://github.com/dmellok/tesserae-device-photopainter-7.3-bin),
@@ -20,7 +20,18 @@ S3, no PMIC (battery is read straight off an ADC), and a 2-bits-per-pixel frame 
 > Tested on PicPak **hardware revision v0.0.1**, migrating from **official firmware v1.1.11**
 > to this firmware and back (stock restore verified).
 
+## What you need before you start
+
+- A **Tesserae server** already running on your network — *the frame is useless without one; it's the
+  thing that sends the photos.* Set one up first: [Tesserae](https://github.com/dmellok/tesserae).
+- A **computer** (macOS, Windows, or Linux) to do the flashing, and roughly **2 hours free** for the
+  one-time backup (it runs unattended — you don't have to sit and watch).
+- A **USB-C data cable** — many cables are charge-only and won't work; if the computer never sees the
+  frame, a wrong cable is the most common cause.
+- Your **WiFi network name and password** (2.4 GHz — the ESP32-C3 has no 5 GHz radio).
+
 **Contents:**
+[What you need](#what-you-need-before-you-start) ·
 [Hardware](#hardware) ·
 [Installing the firmware](#installing-the-firmware) (backup → flash → set up) ·
 [Going back to stock](#going-back-to-stock) ·
@@ -57,9 +68,6 @@ LSM6 IMU (`CS 7 · INT 5`), unused by this firmware. Cell: single-cell Li-Po, 3.
 
 The rest of this section is the detailed version of those three steps, with the command-line
 alternatives and every warning worth reading first.
-
-Three steps: **back up** the stock firmware, **flash** the release build, **set up** via the
-on-device portal.
 
 > ⚠️ **Never `erase_flash` this board** — a full chip erase of the 32 MB part fails partway and
 > leaves the device half-wiped (recovery: just flash again — small region writes work). No erase
