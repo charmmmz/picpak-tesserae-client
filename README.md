@@ -1,9 +1,13 @@
 # picpak-tesserae-client
 
+<p align="center">
+  <img width="600" height="400" alt="IMG_0084" src="https://github.com/user-attachments/assets/3b2a6861-38e3-4041-af11-431509589045" />
+</p>
+
 **In plain terms:** this replaces the stock firmware on the PicPak photo frame so it shows photos
-from *your own* self-hosted [Tesserae](https://github.com/dmellok/tesserae) server instead of the
-vendor's cloud — no vendor account, no subscription. You flash it once, tell the frame your WiFi and
-server on a phone setup screen, and it fetches a new picture on its own schedule.
+from *your own* self-hosted [Tesserae](https://github.com/dmellok/tesserae) server instead of the 
+stock firmware's remote service. You flash it once, tell the frame your WiFi and server on a
+phone setup screen, and it fetches a new picture on its own schedule.
 
 **Under the hood:** it's battery-powered firmware for the frame's **ESP32-C3**. Most of the time the
 device is in deep sleep; on each scheduled wake it connects to WiFi, pulls the current frame from
