@@ -31,7 +31,9 @@ static bool s_frame_pending;           // framebuf() holds a fresh relay frame t
 // device-token route unambiguously means "this pairing is gone". Require it on TWO
 // wakes before acting (a flaky captive portal/middlebox injecting one 401 cannot).
 // RTC memory: survives deep sleep (= "across wakes"); a power cycle resets it,
-// erring toward staying paired.
+// erring toward staying paired. RTC_DATA_ATTR (unlike main.c's RTC_NOINIT_ATTR
+// s_button_event_seq) is zero-initialised by startup on any non-deep-sleep reset,
+// so this reset-to-zero is automatic and needs no explicit cold-boot guard.
 RTC_DATA_ATTR static uint32_t s_auth_fail_streak;
 
 // One vote per wake: a wake makes up to THREE device-token requests (frame/status/

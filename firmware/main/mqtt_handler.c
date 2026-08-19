@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_crt_bundle.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "mqtt_client.h"
@@ -155,6 +156,15 @@ int mqtt_run_loop(esp_reset_reason_t reset_reason) {
         cfg.credentials.username = user;
         cfg.credentials.authentication.password = pass;
     }
+    // TLS trust anchor for the secure schemes the portal offers (mqtts:// / wss://).
+    // Without a CA source the handshake always fails, so the documented "use mqtts://
+    // for TLS" hint could never work. Attach the same public-CA bundle the REST and
+    // relay paths use (rest_handler.c, relay.c, image_fetcher.c) — publicly-trusted
+    // certs only, so a self-signed LAN broker still won't validate (that's a private
+    // CA / PSK case, out of scope). Attach ONLY on the secure schemes: setting it on a
+    // plain mqtt:// / ws:// URI can mis-configure the client.
+    if (strncmp(uri, "mqtts://", 8) == 0 || strncmp(uri, "wss://", 6) == 0)
+        cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_mqtt_client_handle_t cli = esp_mqtt_client_init(&cfg);
     if (!cli) { vEventGroupDelete(s_events); s_events = NULL; return fallback; }

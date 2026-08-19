@@ -5,6 +5,9 @@
 #include "esp_attr.h"   // RTC_DATA_ATTR
 
 // Cross-wake state in RTC-RAM: survives deep-sleep, nulled on cold boot -> always boot NORMAL.
+// RTC_DATA_ATTR (unlike main.c's RTC_NOINIT_ATTR s_button_event_seq) IS zero-initialised by
+// startup on every non-deep-sleep reset, so it needs no explicit cold-boot guard — don't
+// "align" it with the button counter's guard, the two attributes are deliberately different.
 RTC_DATA_ATTR static lowbatt_state_t s_lb;
 
 lowbatt_action_t lowbatt_gate(int batt_mv, bool force_resume) {

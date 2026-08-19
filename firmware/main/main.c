@@ -30,8 +30,8 @@ static const char *TAG = "picpak";
 
 // Monotonic id bumped per button-refresh request, retained across deep sleep so
 // the server can dedup one physical press delivered on both /frame and /status.
-// RTC_NOINIT survives deep sleep but is garbage on a true cold boot -> zeroed on
-// ESP_RST_POWERON in app_main.
+// RTC_NOINIT is never initialised by startup, so it is only valid after a
+// deep-sleep wake -> zeroed on every other reset reason in app_main.
 RTC_NOINIT_ATTR static uint32_t s_button_event_seq;
 
 // Authorship, baked into the binary's .rodata (find it with
@@ -63,8 +63,14 @@ void app_main(void) {
     led_init();
     led_ack();
 
-    // Cold boot: RTC-retained button counter holds garbage from power-up.
-    if (reason == ESP_RST_POWERON) s_button_event_seq = 0;
+    // RTC_NOINIT survives deep sleep but holds garbage after any other start — a
+    // true power-up, an esptool/USB reset (how `idf.py flash` and the web flasher
+    // end), an esp_restart() from provisioning, or a brownout-adjacent ESP_RST_UNKNOWN.
+    // Only a deep-sleep wake is a real continuation of the previous session, so zero
+    // the counter on everything else. (ESP_RST_POWERON alone missed the USB/SW cases
+    // and could start the seq from a random value that collides with a server-recorded
+    // id, silently dropping one button press.)
+    if (reason != ESP_RST_DEEPSLEEP) s_button_event_seq = 0;
 
     // Provisioning: a 20s button-hold at wake, or no usable WiFi SSID, enters the
     // captive portal. A shorter 5-20s hold is a refresh gesture (classified on
@@ -129,22 +135,25 @@ void app_main(void) {
     }
     // Just recovered from the locked state via an automatic route (a tap that charged, or the daily
     // poll) — not a 5 s hold. The charge splash was painted outside the ETag machinery, so a plain
-    // re-fetch could return 304 and skip the paint, stranding the splash. Clear the ETag to force a
-    // 200 repaint of the live photo. A 5 s hold (want_refresh) is left alone: its refresh path
-    // already drops If-None-Match and pulls fresh content — identical to the good-battery gesture.
-    if (was_locked && !want_refresh) config_set_etag("");
+    // re-fetch could return 304 (or an unchanged MQTT frame URL, or a relay 304) and skip the paint,
+    // stranding the splash on every transport. Clear the frame ref for ALL transports to force a full
+    // repaint of the live photo. A 5 s hold (want_refresh) is left alone: its refresh path already
+    // drops If-None-Match and pulls fresh content — identical to the good-battery gesture.
+    if (was_locked && !want_refresh) config_clear_frame_ref();
 
     // One-shot after provisioning: paint the "waiting for first frame" splash and
-    // clear the ETag so the first /frame returns 200 and the real photo repaints
-    // over the splash. Deliberately after the power-fault and low-battery gates:
+    // clear the frame ref so the first poll repaints the real photo over the splash.
+    // Clearing all transports matters on MQTT: a re-provision can leave a retained
+    // frame URL identical to the stored one, so a REST-only clear left the paired
+    // splash stranded. Deliberately after the power-fault and low-battery gates:
     // the 13-22 s EPD refresh is the heaviest rail load we have, and taking the
     // flag earlier would consume it just before a brownout could kill the paint —
     // gated here, the splash intent survives to the next healthy boot.
     bool just_provisioned = config_take_paired_pending();
     if (just_provisioned) {
-        config_set_etag("");
+        config_clear_frame_ref();
         splash_show_paired();
-        ESP_LOGI(TAG, "paired_pend: painted paired splash + cleared ETag");
+        ESP_LOGI(TAG, "paired_pend: painted paired splash + cleared frame ref");
     }
 
     // Transport dispatch: 0 = MQTT, 1 = REST (default; matches the portal's

@@ -80,5 +80,10 @@ void config_get_mqtt(char *uri, size_t uri_sz, char *user, size_t user_sz,
 // ETag so a transport switch causes one harmless refetch, never a false skip).
 void config_get_frame_url(char *out, size_t out_sz);
 void config_set_frame_url(const char *url);
+// Forget "the panel is already showing the current frame" for EVERY transport
+// (REST ETag, MQTT frame URL, relay ETag). Call whenever firmware paints something
+// outside the normal frame path (a splash), so the next poll returns a full
+// 200 / new-URL and repaints the live photo rather than 304-ing onto the splash.
+void config_clear_frame_ref(void);
 void config_set_paired_pending(bool pending);
 bool config_take_paired_pending(void);   // returns flag, then clears it (one-shot)

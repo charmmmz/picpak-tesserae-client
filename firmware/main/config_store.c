@@ -145,6 +145,16 @@ void config_get_frame_url(char *out, size_t out_sz) {
 void config_set_frame_url(const char *url) {
     nvs_set_str_commit(NS_REST, "frame_url", url ? url : "");
 }
+void config_clear_frame_ref(void) {
+    // Clear all three transports' dedup keys unconditionally rather than branching
+    // on the active transport: three NVS writes on a path that fires at most once
+    // per splash, and immune to the very bug this fixes (a fourth transport gets
+    // it for free once its key is added here). nvs_set_str short-circuits an
+    // identical value, so clearing an already-empty key is not a write.
+    config_set_etag("");            // REST  (rest/frame_etag)
+    config_set_frame_url("");       // MQTT  (rest/frame_url)
+    config_set_relay_etag("");      // relay (relay/etag)
+}
 void config_set_transport(uint8_t mode) {
     nvs_handle_t h;
     if (nvs_open(NS_REST, NVS_READWRITE, &h) != ESP_OK) return;

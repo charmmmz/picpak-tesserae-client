@@ -9,6 +9,9 @@
 
 #include <stdio.h>
 #include <time.h>
+#include "esp_log.h"
+
+static const char *TAG = "heartbeat";
 
 static const char *wake_reason_str(esp_reset_reason_t r) {
     switch (r) {
@@ -28,7 +31,7 @@ static const char *wake_reason_str(esp_reset_reason_t r) {
 void heartbeat_json(char *dst, size_t dst_sz, int sleep_interval_s,
                     esp_reset_reason_t reset_reason,
                     const char *button, uint32_t button_event_id) {
-    if (!dst || dst_sz == 0) return;
+    if (!dst || dst_sz < 3) return;   // need room for at least "{}" + NUL
     int mv = power_battery_mv();
     int pct = power_battery_pct(mv);   // reuse the one reading (single ADC read + log)
     int rssi = wifi_rssi();
@@ -43,7 +46,7 @@ void heartbeat_json(char *dst, size_t dst_sz, int sleep_interval_s,
         "\"sleep_interval_s\":%d,\"next_sleep_s\":%d,\"wake_reason\":\"%s\"",
         mv, pct, rssi, ip, FW_VERSION, DEVICE_KIND, EPD_W, EPD_H,
         sleep_interval_s, sleep_interval_s, wake_reason_str(reset_reason));
-    if (n < 0 || (size_t)n >= dst_sz) return;   // truncated; leave what we have
+    if (n < 0 || (size_t)n >= dst_sz) goto truncated;
     // Absolute epoch the device intends to wake next (reference parity). The
     // server cross-checks it against next_sleep_s and prefers next_sleep_s on
     // disagreement, so only send it with a real clock — the REST Date header
@@ -52,10 +55,22 @@ void heartbeat_json(char *dst, size_t dst_sz, int sleep_interval_s,
     if (now > CLOCK_SANE_EPOCH && sleep_interval_s > 0)
         n += snprintf(dst + n, dst_sz - n, ",\"sleep_until\":%lld",
                       (long long)(now + sleep_interval_s));
-    if (n < 0 || (size_t)n >= dst_sz) return;
+    if (n < 0 || (size_t)n >= dst_sz) goto truncated;
     if (button && button[0])
         n += snprintf(dst + n, dst_sz - n, ",\"button\":\"%s\",\"button_event_id\":%u",
                       button, (unsigned)button_event_id);
-    if (n < 0 || (size_t)n >= dst_sz) return;
+    if (n < 0 || (size_t)n >= dst_sz - 1) goto truncated;   // need room for the closing '}'
     snprintf(dst + n, dst_sz - n, "}");
+    return;
+
+truncated:
+    // Never POST a fragment: an object left unterminated by a truncated append is
+    // rejected wholesale by the server, losing the battery/RSSI/button telemetry
+    // that would otherwise have fit. Emit a minimal valid object instead so the
+    // server still sees the device is alive, and log it so the condition is findable
+    // (currently unreachable — ~250 B into a 512 B buffer — but the append list keeps
+    // growing and the buffer is the kind of thing that gets tightened).
+    ESP_LOGE(TAG, "heartbeat body did not fit in %u bytes; sending minimal",
+             (unsigned)dst_sz);
+    snprintf(dst, dst_sz, "{\"fw_version\":\"%s\"}", FW_VERSION);
 }

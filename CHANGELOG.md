@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.9.1
+
+### Fixed
+- **Splashes stranded on MQTT and cloud relay** (`firmware/main/config_store.c`, `config_store.h`,
+  `main.c`). The low-battery charge splash and the post-provisioning "paired" splash are painted
+  outside the normal frame path, so firmware clears the frame dedup key afterwards to force a repaint
+  of the live photo. That clear (`config_set_etag("")`) only touched the **REST** ETag — on MQTT the
+  retained frame URL still matched (`frame url unchanged; skipping download`) and on relay the stored
+  ETag still returned a `304`, so on both transports the panel stayed stuck on the splash until the
+  server published a genuinely different frame. A recovered low-battery device therefore did not come
+  back on MQTT or relay, and a re-provisioned MQTT device sat on the "paired" splash. New
+  transport-agnostic `config_clear_frame_ref()` clears all three dedup keys (REST ETag, MQTT frame
+  URL, relay ETag); both call sites (`main.c` lock-recovery and `paired_pending`) now use it.
+- **`mqtts://` TLS had no trust anchor** (`firmware/main/mqtt_handler.c`). The setup portal offers
+  `mqtts://` (and `wss://`) for TLS and the URI normaliser accepts it, but the MQTT client config was
+  built with no CA source, so the handshake always failed with a generic `broker connect failed`. Now
+  attaches the same public-CA bundle the REST and relay paths use, conditional on the secure scheme
+  (`mqtts://` / `wss://`); plain `mqtt://` / `ws://` are untouched. Publicly-trusted broker certs
+  (e.g. HiveMQ/EMQX cloud) validate; a self-signed LAN broker still won't (private-CA / PSK out of
+  scope).
+- **Button event id could start from RTC garbage** (`firmware/main/main.c`). `s_button_event_seq`
+  (`RTC_NOINIT_ATTR`, never initialised by startup) was only zeroed on `ESP_RST_POWERON`, but a
+  freshly flashed device's first boot usually reports `ESP_RST_USB` (esptool / web flasher),
+  `ESP_RST_SW` (the `esp_restart()` after provisioning), or `ESP_RST_UNKNOWN` — leaving the counter at
+  a random value. It still increments monotonically so ordinary use is fine, but a start value that
+  collides with an id the server already recorded silently drops that button press once. Guard
+  inverted to zero on every reset reason except a genuine deep-sleep wake (`reason != ESP_RST_DEEPSLEEP`).
+  Added a note at the two `RTC_DATA_ATTR` counters (`relay.c`, `lowbatt.c`) — zero-initialised on cold
+  boot and correct as-is — so a future "consistency" edit doesn't break them.
+- **Truncated heartbeat JSON could be sent unterminated** (`firmware/main/heartbeat.c`). The status
+  object is built with its closing brace omitted so optional fields (`sleep_until`, the button pair)
+  can be appended, and each append guarded truncation with a bare `return` — leaving the object
+  without its closing `}`. The caller then POSTed the fragment, which the server rejects wholesale,
+  losing the telemetry in it. Not reachable at the current buffer size, but a trap as fields
+  accumulate. Truncation now emits a minimal valid object (`{"fw_version":"…"}`) and logs an
+  `ESP_LOGE`; the final guard reserves room for the `}`.
+
 ## 0.9.0
 
 ### Added
@@ -50,7 +87,9 @@
   relay (identity comes from pairing / the server's *Add a remote panel* slot), so the Device card
   is hidden when the transport is **CLOUD RELAY**; REST/MQTT unchanged.
 - **Portal polish** (`provisioning.c`): a **blank Relay URL now defaults** to the hosted
-  `https://relay.tesserae.ink` (matching the field's hint — previously an empty URL was rejected).
+  `https://relay.tesserae.ink` (matching the field's hint — previously an empty URL was rejected);
+  the transport option reads **CLOUD RELAY** (all caps, like REST API / MQTT); and REST API's
+  **(recommended)** is now bold.
 - `FW_VERSION` bumped `0.8.2` → `0.9.0`.
 
 ## 0.8.2
