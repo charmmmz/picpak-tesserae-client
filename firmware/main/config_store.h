@@ -43,6 +43,8 @@ void config_set_wifi(const char *ssid, const char *pass);   // blank/NULL pass k
 void config_set_server_url(const char *url);
 void config_set_transport(uint8_t mode);                    // 0=MQTT, 1=REST
 uint8_t config_get_transport(uint8_t fallback);
+void config_set_waveform(uint8_t mode);                     // 0=5s, 1=10s, 2=native MTP
+uint8_t config_get_waveform(uint8_t fallback);
 void config_set_pairing_code(const char *code);
 void config_get_pairing_code(char *out, size_t out_sz);   // empty if none set
 

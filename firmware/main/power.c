@@ -24,7 +24,7 @@ static int cmp_int(const void *a, const void *b) {
 }
 
 // Read the battery via ADC1_CH2 (GPIO2), curve-fitting calibrated, median of
-// samples — mirrors the stock "5x20 median" robustness. voltageMv =
+// samples for robustness. voltageMv =
 // calibrated pin mV * BATT_DIVIDER (the board's resistor divider).
 static int power_read_mv(void) {
     adc_oneshot_unit_handle_t adc = NULL;

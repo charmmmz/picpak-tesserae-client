@@ -29,9 +29,16 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION          "0.9.1"
+#define FW_VERSION          "0.9.3"
 #endif
 #define DEVICE_KIND         "picpak_client"
+
+// Panel refresh waveform — compile-time fallback when the NVS value is unset.
+// Portal-selectable and persisted (config_get/set_waveform); values match the
+// epd_waveform_t enum: 0 = 5s vendor fast, 1 = 10s vendor balanced, 2 = native MTP.
+#ifndef DEFAULT_WAVEFORM
+#define DEFAULT_WAVEFORM    0   /* 5s fastest */
+#endif
 
 // Deep-sleep bounds + fallback (seconds).
 #define SLEEP_INTERVAL_DEFAULT_S   900

@@ -5,6 +5,16 @@
 #include "esp_err.h"
 #include <stdint.h>
 
+// Refresh waveform modes. Numeric values are the stored NVS values (see
+// config_get/set_waveform) AND the provision-portal radio order — do NOT
+// renumber. Faster waveforms trade color margin for speed; native is the
+// panel's built-in fallback.
+typedef enum {
+    EPD_WAVE_5S     = 0,   // vendor fast LUT (~5 s); fastest, slightly softer colour
+    EPD_WAVE_10S    = 1,   // vendor balanced LUT (~10 s)
+    EPD_WAVE_NATIVE = 2,   // panel built-in MTP (~13-22 s); slowest, fullest colour
+} epd_waveform_t;
+
 esp_err_t epd_init(void);                 // SPI + GPIO, reset, run init sequence
 void      epd_display(const uint8_t *fb); // load 30,000 bytes + refresh, wait BUSY
 void      epd_sleep(void);                // panel deep sleep

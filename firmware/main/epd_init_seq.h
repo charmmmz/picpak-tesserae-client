@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 varanu5 <https://github.com/varanu5>
 //
-// Recovered byte-exact from stock-firmware reverse-engineering (see
-// project_panel_driver_re). Row format: { cmd, n_data, data[0..n-1] }.
-// Iterate by array size — 0xFF is a VALID command byte for this controller,
-// so there is NO sentinel terminator.
+// Row format: { cmd, n_data, data[0..n-1] }. Iterate by array size — 0xFF is a
+// VALID command byte for this controller, so there is NO sentinel terminator.
 //
 // Power-ON (0x04) and Display-Refresh (0x12) are issued by epd_display(),
 // not from these tables.

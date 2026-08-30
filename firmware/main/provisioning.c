@@ -8,6 +8,7 @@
 #include "provision_form.h"
 #include "mqtt_parse.h"
 #include "config_store.h"
+#include "epd_driver.h"   // epd_waveform_t (portal <-> driver value contract)
 #include "relay.h"        // RELAY_DEFAULT_URL
 #include "defaults.h"
 
@@ -256,6 +257,36 @@ static const char k_form_transport_fmt[] =
 "</div>"
 "</section>";
 
+// Refresh-speed card; %s x3 = (w5_checked, w10_checked, wnative_checked). Always
+// visible (orthogonal to transport). Values map to config_set_waveform / epd_waveform_t.
+static const char k_form_waveform_fmt[] =
+"<section class=\"card\"><h2>Refresh speed</h2>"
+"<div class=\"field\">"
+"<label class=\"radio\" for=\"wf-5s\">"
+"<input type=\"radio\" name=\"waveform\" value=\"5s\" id=\"wf-5s\"%s>"
+"<span><strong>5 s</strong> <strong>(recommended)</strong>"
+"<p class=\"hint\" style=\"margin:2px 0 0\">"
+"Fastest updates. Colour is good, but yellow and red look a little softer than Native.</p>"
+"</span>"
+"</label>"
+"<label class=\"radio\" for=\"wf-10s\">"
+"<input type=\"radio\" name=\"waveform\" value=\"10s\" id=\"wf-10s\"%s>"
+"<span><strong>10 s</strong> <span style=\"color:var(--muted);font-weight:400\">(slower)</span>"
+"<p class=\"hint\" style=\"margin:2px 0 0\">"
+"Slower than 5 s, with about the same colour. 5 s is usually the better choice.</p>"
+"</span>"
+"</label>"
+"<label class=\"radio\" for=\"wf-native\">"
+"<input type=\"radio\" name=\"waveform\" value=\"native\" id=\"wf-native\"%s>"
+"<span><strong>Native</strong> <span style=\"color:var(--muted);font-weight:400\">(best colour)</span>"
+"<p class=\"hint\" style=\"margin:2px 0 0\">"
+"Slowest (about 13 to 22 s), but the richest, truest colour, with the best yellow and red. "
+"It also adjusts itself for temperature. Best when colour matters most.</p>"
+"</span>"
+"</label>"
+"</div>"
+"</section>";
+
 // Device + MQTT card; %s x3 = (device_id, mqtt_uri, mqtt_user).
 static const char k_form_mqtt_fmt[] =
 "<section class=\"card hide-on-relay\"><h2>Device</h2>"
@@ -480,6 +511,13 @@ static esp_err_t render_form(httpd_req_t *req, const char *error)
              relay_cfg ? " checked" : "");
     httpd_resp_sendstr_chunk(req, form);
 
+    uint8_t waveform = config_get_waveform(DEFAULT_WAVEFORM);
+    snprintf(form, sizeof form, k_form_waveform_fmt,
+             (waveform == EPD_WAVE_5S)     ? " checked" : "",
+             (waveform == EPD_WAVE_10S)    ? " checked" : "",
+             (waveform == EPD_WAVE_NATIVE) ? " checked" : "");
+    httpd_resp_sendstr_chunk(req, form);
+
     snprintf(form, sizeof form, k_form_mqtt_fmt, e_devid, e_uri, e_user);
     httpd_resp_sendstr_chunk(req, form);
 
@@ -536,7 +574,7 @@ static esp_err_t h_save(httpd_req_t *req)
     }
     body[total] = '\0';
 
-    char ssid[33] = {0}, pass[65] = {0}, transport[8] = {0};
+    char ssid[33] = {0}, pass[65] = {0}, transport[8] = {0}, waveform[8] = {0};
     char mqtt_uri[160] = {0}, mqtt_user[64] = {0}, mqtt_pass[64] = {0};
     char server_url[192] = {0}, pairing_code[16] = {0}, device_id[33] = {0};
     char relay_url[192] = {0}, relay_code[40] = {0};
@@ -544,6 +582,7 @@ static esp_err_t h_save(httpd_req_t *req)
     bool have_ssid = provform_field(body, "ssid", ssid, sizeof ssid) && ssid[0];
     bool have_pass = provform_field(body, "pass", pass, sizeof pass) && pass[0];
     provform_field(body, "transport",   transport,   sizeof transport);
+    provform_field(body, "waveform",    waveform,    sizeof waveform);
     bool have_uri  = provform_field(body, "mqtt_uri", mqtt_uri, sizeof mqtt_uri) && mqtt_uri[0];
     provform_field(body, "mqtt_user",  mqtt_user,   sizeof mqtt_user);
     bool have_mpw  = provform_field(body, "mqtt_pass", mqtt_pass, sizeof mqtt_pass) && mqtt_pass[0];
@@ -558,6 +597,12 @@ static esp_err_t h_save(httpd_req_t *req)
     bool use_relay = (strcmp(transport, "relay") == 0);
     bool use_rest  = !use_relay && (strcmp(transport, "mqtt") != 0);
     uint8_t mode = use_rest ? 1 : 0;
+
+    // Refresh waveform is orthogonal to transport; an absent/unknown value keeps
+    // the recommended default. Applied unconditionally below (every save).
+    uint8_t wave = (strcmp(waveform, "5s") == 0)     ? EPD_WAVE_5S :
+                   (strcmp(waveform, "native") == 0) ? EPD_WAVE_NATIVE :
+                   (strcmp(waveform, "10s") == 0)    ? EPD_WAVE_10S : DEFAULT_WAVEFORM;
 
     if (!have_ssid) return render_form(req, "WiFi network name (SSID) is required.");
     // Device id is optional (blank = auto-derive from MAC), but if given it must
@@ -586,13 +631,15 @@ static esp_err_t h_save(httpd_req_t *req)
         return render_form(req, "MQTT broker URI is required when transport is MQTT.");
     }
 
-    ESP_LOGI(TAG, "saving ssid='%s' transport=%s (req='%s') dest='%s' device_id='%s'",
+    ESP_LOGI(TAG, "saving ssid='%s' transport=%s (req='%s') dest='%s' device_id='%s' waveform=%s",
              ssid, use_relay ? "relay" : use_rest ? "rest" : "mqtt",
              transport[0] ? transport : "rest",
              use_relay ? relay_url : use_rest ? server_url : "(mqtt)",
-             have_devid ? device_id : "(auto)");
+             have_devid ? device_id : "(auto)",
+             wave == EPD_WAVE_5S ? "5s" : wave == EPD_WAVE_NATIVE ? "native" : "10s");
 
     config_set_wifi(ssid, have_pass ? pass : NULL);   // blank pass keeps existing
+    config_set_waveform(wave);                         // refresh speed (all transports)
     // Device id is shared across transports. Blank = leave as-is (auto-derive
     // from MAC at pair time, or keep the server's canonical id once paired).
     if (have_devid) config_set_device_id(device_id);

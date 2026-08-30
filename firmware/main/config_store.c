@@ -167,6 +167,20 @@ uint8_t config_get_transport(uint8_t fallback) {
     nvs_close(h);
     return v;
 }
+// Refresh waveform (0=5s, 1=10s, 2=native). Transport-agnostic device setting,
+// so it lives in the state namespace next to sleep_s. Portal-set, epd_init reads it.
+void config_set_waveform(uint8_t mode) {
+    nvs_handle_t h;
+    if (nvs_open(NS_STATE, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "waveform", mode); nvs_commit(h); nvs_close(h);
+}
+uint8_t config_get_waveform(uint8_t fallback) {
+    nvs_handle_t h; uint8_t v = fallback;
+    if (nvs_open(NS_STATE, NVS_READONLY, &h) != ESP_OK) return fallback;
+    if (nvs_get_u8(h, "waveform", &v) != ESP_OK) v = fallback;
+    nvs_close(h);
+    return v;
+}
 void config_set_paired_pending(bool pending) {
     nvs_handle_t h;
     if (nvs_open(NS_STATE, NVS_READWRITE, &h) != ESP_OK) return;

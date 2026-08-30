@@ -25,10 +25,12 @@ int main(void) {
     assert(strcmp(e, "a&lt;b&gt;&amp;&quot;c") == 0);
 
     // form_field: present, decoded; absent -> false
-    const char *body = "ssid=My%20Net&pass=p%40ss&transport=rest";
+    const char *body = "ssid=My%20Net&pass=p%40ss&transport=rest&waveform=5s";
     char v[64];
     assert(provform_field(body, "ssid", v, sizeof v) && strcmp(v, "My Net") == 0);
     assert(provform_field(body, "pass", v, sizeof v) && strcmp(v, "p@ss") == 0);
+    assert(provform_field(body, "transport", v, sizeof v) && strcmp(v, "rest") == 0);
+    assert(provform_field(body, "waveform", v, sizeof v) && strcmp(v, "5s") == 0);
     assert(!provform_field(body, "missing", v, sizeof v));
 
     // normalize_server_url

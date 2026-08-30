@@ -18,7 +18,7 @@
 // means momentarily driving the pin as ADC.
 #define BATT_ADC_CHANNEL   2       /* ADC1_CHANNEL_2 == GPIO2 */
 #define BATT_DIVIDER       1.45f   /* voltageMv = calibrated pin_mv * BATT_DIVIDER. Value is the
-                                    * stock-firmware disassembly ratio (see docs/low-battery.md);
+                                    * empirically calibrated ratio (see docs/low-battery.md);
                                     * a full cell (pin_mv ~2897 @ 4.2V) reads 4.2V on our 12dB ADC.
                                     * For exactness: BATT_DIVIDER = V_battery(mV) / pin_mv. */
 

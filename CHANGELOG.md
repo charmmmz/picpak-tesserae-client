@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.3
+
+### Added
+- **Temperature-compensated refresh.** On the 5 s / 10 s waveforms the panel drive is now nudged
+  slightly based on the on-chip temperature sensor. The effect is automatic and subtle (no setting,
+  no visible change in normal use); the native waveform is unchanged.
+  
+## 0.9.2
+
+### Added
+- **Selectable refresh speed.** The setup portal now offers three e-paper refresh waveforms — **5 s**
+  (fastest), **10 s** (balanced), and the panel's **native** waveform (no ghosting, slowest).
+  It trades redraw speed against colour fidelity, is saved in NVS, and can be changed any time via the
+  20 s button-hold portal. The default compile-time choice is 5 s.
+
 ## 0.9.1
 
 ### Fixed

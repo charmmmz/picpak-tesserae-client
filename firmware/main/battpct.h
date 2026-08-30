@@ -1,6 +1,6 @@
 // battpct.h — pure battery mV->% curve (host-testable, no ESP deps).
 // PhotoPainter Li-Po discharge curve: piecewise-linear, non-linear vs charge (flat near the top,
-// steep near empty). Chosen over the stock PicPak linear LUT for granular high-end readings
+// steep near empty), for granular high-end readings
 // (100% only at 4200mV, so a nearly-full cell reads 9x% instead of pegging at 100%).
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 varanu5 <https://github.com/varanu5>
