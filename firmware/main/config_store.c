@@ -48,10 +48,26 @@ static void nvs_set_str_commit(const char *ns, const char *key, const char *val)
 }
 
 bool config_get_wifi(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz) {
-    if (nvs_get_str_or_empty(NS_WIFI, "ssid", ssid, ssid_sz) == 0)
-        strlcpy(ssid, WIFI_DEFAULT_SSID, ssid_sz);
-    if (nvs_get_str_or_empty(NS_WIFI, "pass", pass, pass_sz) == 0)
-        strlcpy(pass, WIFI_DEFAULT_PASS, pass_sz);
+    if (!ssid_sz || !pass_sz) return false;
+    ssid[0] = pass[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NS_WIFI, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t cleared = 0;
+        nvs_get_u8(h, "cleared", &cleared);
+        if (cleared) { nvs_close(h); return false; }
+        size_t ns = ssid_sz, np = pass_sz;
+        bool saved = nvs_get_str(h, "ssid", ssid, &ns) == ESP_OK && ssid[0];
+        // An explicitly saved empty password is an open network, not a request
+        // to reuse the compile-time password from a different network.
+        bool saved_password = nvs_get_str(h, "pass", pass, &np) == ESP_OK;
+        nvs_close(h);
+        if (saved) {
+            if (!saved_password) strlcpy(pass, WIFI_DEFAULT_PASS, pass_sz);
+            return true;
+        }
+    }
+    strlcpy(ssid, WIFI_DEFAULT_SSID, ssid_sz);
+    strlcpy(pass, WIFI_DEFAULT_PASS, pass_sz);
     return ssid[0] != '\0';
 }
 
@@ -121,6 +137,15 @@ void config_set_etag(const char *etag) {
 void config_set_wifi(const char *ssid, const char *pass) {
     if (ssid && ssid[0]) nvs_set_str_commit(NS_WIFI, "ssid", ssid);
     if (pass && pass[0]) nvs_set_str_commit(NS_WIFI, "pass", pass);  // blank => keep existing
+    if (ssid && ssid[0]) {
+        nvs_handle_t h;
+        if (nvs_open(NS_WIFI, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u8(h, "cleared", 0);
+            nvs_set_u8(h, "ble_recovery", 0);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
 }
 void config_set_server_url(const char *url) { nvs_set_str_commit(NS_REST, "server_url", url); }
 void config_set_pairing_code(const char *code) { nvs_set_str_commit(NS_REST, "pair_code", code ? code : ""); }
@@ -170,21 +195,94 @@ uint8_t config_get_transport(uint8_t fallback) {
 // Refresh waveform (0=5s, 1=10s, 2=native). Transport-agnostic device setting,
 // so it lives in the state namespace next to sleep_s. Portal-set, epd_init reads it.
 void config_set_waveform(uint8_t mode) {
+    (void)config_save_waveform(mode);
+}
+esp_err_t config_save_waveform(uint8_t mode) {
+    if (mode > 2) return ESP_ERR_INVALID_ARG;
     nvs_handle_t h;
-    if (nvs_open(NS_STATE, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u8(h, "waveform", mode); nvs_commit(h); nvs_close(h);
+    esp_err_t err = nvs_open(NS_STATE, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    uint8_t current;
+    if (nvs_get_u8(h, "waveform", &current) == ESP_OK && current == mode) {
+        nvs_close(h);
+        return ESP_OK;
+    }
+    err = nvs_set_u8(h, "waveform", mode);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err;
 }
 uint8_t config_get_waveform(uint8_t fallback) {
     nvs_handle_t h; uint8_t v = fallback;
     if (nvs_open(NS_STATE, NVS_READONLY, &h) != ESP_OK) return fallback;
     if (nvs_get_u8(h, "waveform", &v) != ESP_OK) v = fallback;
     nvs_close(h);
-    return v;
+    return v <= 2 ? v : fallback;
 }
 void config_set_paired_pending(bool pending) {
     nvs_handle_t h;
     if (nvs_open(NS_STATE, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_u8(h, "paired_pen", pending ? 1 : 0); nvs_commit(h); nvs_close(h);
+}
+
+esp_err_t config_save_wifi(const char *ssid, const char *password) {
+    if (!ssid || !ssid[0] || strlen(ssid) > 32 || !password || strlen(password) > 64)
+        return ESP_ERR_INVALID_ARG;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS_WIFI, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    err = nvs_set_str(h, "ssid", ssid);
+    if (err == ESP_OK) err = nvs_set_str(h, "pass", password);
+    if (err == ESP_OK) err = nvs_set_u8(h, "cleared", 0);
+    if (err == ESP_OK) err = nvs_set_u8(h, "ble_recovery", 0);
+    if (err == ESP_OK) {
+        nvs_erase_key(h, "ap_bssid");
+        nvs_erase_key(h, "ap_chan");
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+esp_err_t config_clear_wifi(void) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS_WIFI, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    err = nvs_erase_all(h);
+    if (err == ESP_OK) err = nvs_set_u8(h, "cleared", 1);
+    if (err == ESP_OK) err = nvs_set_u8(h, "ble_recovery", 1);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err;
+}
+
+bool config_take_ble_recovery(void) {
+    nvs_handle_t h;
+    if (nvs_open(NS_WIFI, NVS_READWRITE, &h) != ESP_OK) return false;
+    uint8_t value = 0;
+    nvs_get_u8(h, "ble_recovery", &value);
+    if (value) {
+        nvs_set_u8(h, "ble_recovery", 0);
+        nvs_commit(h);
+    }
+    nvs_close(h);
+    return value != 0;
+}
+
+esp_err_t config_factory_reset(void) {
+    const char *names[] = {NS_REST, NS_STATE, NS_RELAY};
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        nvs_handle_t h;
+        esp_err_t err = nvs_open(names[i], NVS_READWRITE, &h);
+        if (err != ESP_OK) return err;
+        err = nvs_erase_all(h);
+        if (err == ESP_OK) err = nvs_commit(h);
+        nvs_close(h);
+        if (err != ESP_OK) return err;
+    }
+    esp_err_t err = config_clear_wifi();
+    if (err == ESP_OK) (void)config_take_ble_recovery(); // reset returns to AP setup
+    return err;
 }
 bool config_take_paired_pending(void) {
     nvs_handle_t h; uint8_t v = 0;

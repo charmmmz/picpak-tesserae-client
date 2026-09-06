@@ -1,5 +1,10 @@
 idf_component_register(
     SRCS "main.c"
+         "ble_setup.c"
+         "ble_setup_protocol.c"
+         "ble_wifi.c"
+         "maintenance_screen.c"
+         "vendor/qrcodegen.c"
          "epd_driver.c"
          "fb2bpp.c"
          "config_store.c"
@@ -23,5 +28,5 @@ idf_component_register(
     INCLUDE_DIRS "." "vendor"
     EMBED_FILES "assets/splash_setup.bin" "assets/splash_paired.bin" "assets/splash_lowbatt.bin"
                 "assets/splash_revoked.bin"
-    REQUIRES driver nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
+    REQUIRES bt mbedtls esp_timer driver nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
              json esp_adc lwip esp_hw_support mqtt)

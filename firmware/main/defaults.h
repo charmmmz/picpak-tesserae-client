@@ -29,7 +29,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION          "0.9.3"
+#define FW_VERSION          "0.9.4"
 #endif
 #define DEVICE_KIND         "picpak_client"
 
@@ -84,12 +84,14 @@
 // re-flashable.
 #define BOOT_HOLD_WINDOW_MS        15000
 // Button hold thresholds (classified on RELEASE, see power_boot_gesture):
-//   tap (held at boot, < this) -> deck next (REST: /frame?button=BTN_TAP_BUTTON)
-//   >= this, < PROVISION       -> refresh (REST: /frame?button=refresh, server re-renders)
+//   held at boot, < 5 s        -> deck next (REST: /frame?button=BTN_TAP_BUTTON)
+//   >= 5 s, < 10 s             -> refresh (REST: /frame?button=refresh)
+//   >= 10 s, < PROVISION       -> Companion BLE maintenance
 //   >= PROVISION_HOLD_MS        -> captive portal (unchanged)
-// A continuous hold to 20 s reaches provisioning and never fires a refresh on the
-// way, so the existing provisioning gesture is untouched.
-#define BTN_REFRESH_HOLD_MS        5000
+// Maintenance sits above refresh so the short deck-next tap has a wide window and
+// an over-held refresh can never fall into a BLE session. A continuous hold to
+// 20 s reaches provisioning and never fires refresh or maintenance on the way.
+#include "button_gesture.h"
 
 // Button name a tap (short press) sends on REST /frame. "right" = the server's
 // default deck/rotation "next" (automatic prev/next deck ordering, no per-deck
@@ -106,7 +108,7 @@
 // --- Captive-portal provisioning ---
 #define PROVISION_AP_SSID          "Tesserae-Setup"
 #define PROVISION_AP_PASS          "tesserae"        // >= 8 chars
-#define PROVISION_HOLD_MS          20000             // hold button this long -> re-provision
+#define BLE_MAINTENANCE_TIMEOUT_S  300
 #define PROVISION_PORTAL_TIMEOUT_S 600               // portal idle timeout -> deep sleep
 #define PROVISION_SCAN_MAX         12
 

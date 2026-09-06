@@ -15,7 +15,7 @@ Modelled on Tesserae's battery-native reference client
 but retargeted to the PicPak's hardware: a smaller 4-colour panel, an ESP32-C3 (RISC-V) instead of an
 S3, no PMIC (battery is read straight off an ADC), and a 2-bits-per-pixel frame format.
 
-> **Status:** working end-to-end over REST, MQTT, and cloud relay on real hardware. `FW_VERSION 0.9.3`.
+> **Status:** working end-to-end over REST, MQTT, and cloud relay on real hardware. `FW_VERSION 0.9.4`.
 > See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 > Tested on PicPak **hardware revision v0.0.1**, migrating from **official firmware v1.1.11**
 > to this firmware and back (stock restore verified).
@@ -236,7 +236,7 @@ vendor's update/OTA tools stop recognizing the device until you restore stock, w
 WiFi + server come from an on-device **SoftAP captive portal** (`firmware/main/provisioning.c`), with no
 recompiling. It opens automatically when there are no usable creds at boot (empty NVS + empty
 `secrets.h`), or on demand via the ~20 s button hold below. The portal also lets you pick a
-**refresh speed** (5 s, 10 s (default), or the panel's native waveform), a trade-off between how
+**refresh speed** (5 s (default), 10 s, or the panel's native waveform), a trade-off between how
 fast the screen redraws and colour fidelity; the choice is saved and can be changed any time. The
 fast waveforms also get a small automatic temperature compensation (from the on-chip sensor); it
 needs no setup.
@@ -250,12 +250,18 @@ are **REST transport only**):
 - **Brief hold (~0.5 s, anything held under 5 s)** → flips to the **next page of the device's Deck**
   in Tesserae (manual deck navigation; the wake sends `?button=right`). Needs a Deck bound to the
   device; with none it is a harmless no-op that behaves like a quick tap.
-- **Hold ~5 s** → **force refresh**: the server re-renders the current page with fresh data and the
-  frame repaints. This is also the deliberate override that resumes a battery-locked device.
+- **Hold ~5 s (5–10 s)** → **force refresh**: the server re-renders the current page with fresh data
+  and the frame repaints. This is also the deliberate override that resumes a battery-locked device.
+- **Hold ~10 s (10–20 s)** → **Bluetooth maintenance** in Tesserae Companion.
+  Read diagnostics, repair Wi-Fi, or change refresh speed without a reachable server.
+  A QR code and passkey authorize a five-minute session. See [Bluetooth maintenance](docs/ble-maintenance.md).
+  Sitting above the refresh window gives the tap a wide gesture window and keeps an over-held
+  refresh from ever opening a BLE session by accident.
 - **Hold ~20 s** → reopens the setup portal (deliberate re-provision of WiFi/server).
 - **Status LED** (`firmware/main/led.{c,h}`, GPIO21). Screen-free status: **one blink on every wake**
   (timer or button); while holding the button the feedback steps off → **steady-on** past the ~5 s
-  refresh point → **rapid burst** at the ~20 s provisioning point, so you can feel the timing without
+  refresh point → **pulsing** at ~10 s for Bluetooth → **rapid burst** at the ~20 s provisioning
+  point, so you can feel the timing without
   watching the panel. The console runs on USB-Serial-JTAG (`/dev/cu.usbmodem*`), so GPIO21, which is
   also the UART0 TX pin, carries no log traffic and is a clean, dedicated LED.
 
@@ -393,7 +399,7 @@ precedes the paint by its 13 to 22 s duration):
   "battery_pct": 96,
   "rssi": -63,
   "ip": "10.0.20.40",
-  "fw_version": "0.9.3",
+  "fw_version": "0.9.4",
   "kind": "picpak_client",
   "panel_w": 400,
   "panel_h": 300,

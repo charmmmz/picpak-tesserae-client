@@ -5,6 +5,7 @@
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 esp_err_t config_init(void);   // nvs_flash_init (+ erase-recover on corruption)
 
@@ -45,6 +46,12 @@ void config_set_transport(uint8_t mode);                    // 0=MQTT, 1=REST
 uint8_t config_get_transport(uint8_t fallback);
 void config_set_waveform(uint8_t mode);                     // 0=5s, 1=10s, 2=native MTP
 uint8_t config_get_waveform(uint8_t fallback);
+// Checked BLE writes: acknowledge only after NVS has committed successfully.
+esp_err_t config_save_waveform(uint8_t mode);
+esp_err_t config_save_wifi(const char *ssid, const char *password);
+esp_err_t config_clear_wifi(void); // preserves REST/MQTT/relay and speed; opens BLE once
+esp_err_t config_factory_reset(void);
+bool config_take_ble_recovery(void);
 void config_set_pairing_code(const char *code);
 void config_get_pairing_code(char *out, size_t out_sz);   // empty if none set
 

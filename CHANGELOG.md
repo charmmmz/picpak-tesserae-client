@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+## 0.9.4
+
+### Added
+- Exit Bluetooth maintenance without a phone by briefly pressing and releasing
+  the wake button after the QR screen is ready. Saved settings are retained,
+  and the expired QR is cleared before normal operation resumes.
+- **Bluetooth maintenance from Tesserae Companion.** Hold the wake button for
+  about 10 seconds (release between 10 and 20 seconds) to open a five-minute
+  local session with a QR code and six-digit passkey. Read diagnostics, repair
+  Wi-Fi while preserving REST/MQTT/relay configuration, restart, or clear
+  settings without requiring a reachable Tesserae server. The 5-second refresh
+  and 20-second AP setup gestures remain available.
+- **Refresh speed over Bluetooth.** Choose 5 s, 10 s, or Native in Companion.
+  The setting is shared with the AP portal, saved on the display, and takes
+  effect on the next refresh. Companion confirms a change only after it is saved.
+
+### Changed
+- **Bluetooth maintenance now enters at ~10 s instead of ~3 s.** The button
+  gesture map is reordered so maintenance sits above refresh: tap (deck next)
+  is now anything under 5 s, refresh is 5–10 s, maintenance is 10–20 s, and AP
+  setup stays at 20 s. This widens the deck-next tap window and stops a
+  slightly over-held refresh (or deck-next) from accidentally opening a BLE
+  session. The hold LED cue follows suit: steady-on at 5 s (refresh armed),
+  pulsing at 10 s (release for Bluetooth), burst at 20 s (AP setup).
+
+### Fixed
+- The "still holding" boot-hold log now fires on elapsed time rather than an
+  exact `waited % 1000` match that a timer-derived counter almost never hit.
+
 ## 0.9.3
 
 ### Added
