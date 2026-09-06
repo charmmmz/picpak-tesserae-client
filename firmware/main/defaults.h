@@ -29,7 +29,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION          "0.9.3"
+#define FW_VERSION          "0.9.4"
 #endif
 #define DEVICE_KIND         "picpak_client"
 
@@ -84,12 +84,13 @@
 // re-flashable.
 #define BOOT_HOLD_WINDOW_MS        15000
 // Button hold thresholds (classified on RELEASE, see power_boot_gesture):
-//   held at boot, < 3 s        -> deck next (REST: /frame?button=BTN_TAP_BUTTON)
-//   >= 3 s, < 5 s              -> Companion BLE maintenance
-//   >= 5 s, < PROVISION        -> refresh (REST: /frame?button=refresh)
+//   held at boot, < 5 s        -> deck next (REST: /frame?button=BTN_TAP_BUTTON)
+//   >= 5 s, < 10 s             -> refresh (REST: /frame?button=refresh)
+//   >= 10 s, < PROVISION       -> Companion BLE maintenance
 //   >= PROVISION_HOLD_MS        -> captive portal (unchanged)
-// A continuous hold to 20 s reaches provisioning and never fires a refresh on the
-// way, so the existing provisioning gesture is untouched.
+// Maintenance sits above refresh so the short deck-next tap has a wide window and
+// an over-held refresh can never fall into a BLE session. A continuous hold to
+// 20 s reaches provisioning and never fires refresh or maintenance on the way.
 #include "button_gesture.h"
 
 // Button name a tap (short press) sends on REST /frame. "right" = the server's

@@ -8,13 +8,17 @@ the bitmap font is public domain.
 
 ## Entering maintenance
 
-While the display is sleeping, press and hold its wake button. At about three
-seconds the LED pulses: release before five seconds for Bluetooth maintenance.
-Keep holding to five seconds for the existing refresh action, or twenty seconds
-for AP setup. The gesture is classified on release, so the longer actions do
-not open BLE on their way through three seconds. This first implementation
-recognizes gestures at boot/wake; it does not interrupt a running screen refresh
-or captive portal. A fresh device still uses the AP for initial server setup.
+While the display is sleeping, press and hold its wake button. At about five
+seconds the LED lights steady (refresh armed); at about ten seconds it pulses:
+release between ten and twenty seconds for Bluetooth maintenance. Release before
+five seconds for a deck-next tap, between five and ten seconds for the existing
+refresh action, or keep holding to twenty seconds for AP setup. The gesture is
+classified on release, so a shorter action never opens BLE on its way through ten
+seconds, and an over-held refresh cannot fall into a BLE session. Maintenance
+deliberately sits above refresh so the short tap keeps a wide, forgiving window.
+This first implementation recognizes gestures at boot/wake; it does not interrupt
+a running screen refresh or captive portal. A fresh device still uses the AP for
+initial server setup.
 
 The display paints a QR code and passkey before advertising. Open Bluetooth
 Maintenance in Companion, select the nearby PicPak, then scan the QR code or use

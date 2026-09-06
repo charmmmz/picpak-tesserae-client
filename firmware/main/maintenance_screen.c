@@ -29,7 +29,7 @@ static void text(uint8_t *fb, int x, int y, const char *s, int scale) {
 void maintenance_screen_closed(uint8_t *fb) {
     fb_fill(fb, 1);
     text(fb, 24, 78, "Bluetooth closed", 2);
-    text(fb, 24, 126, "Hold the button for 3 seconds", 1);
+    text(fb, 24, 126, "Hold the button for 10 seconds", 1);
     text(fb, 24, 146, "and release to reconnect.", 1);
     text(fb, 24, 188, "The display will check for its", 1);
     text(fb, 24, 208, "next image when Wi-Fi returns.", 1);

@@ -74,8 +74,9 @@ void app_main(void) {
     if (reason != ESP_RST_DEEPSLEEP) s_button_event_seq = 0;
 
     // Provisioning: a 20s button-hold at wake, or no usable WiFi SSID, enters the
-    // captive portal. A shorter 5-20s hold is a refresh gesture (classified on
-    // release; see power_boot_gesture). (Also runs the flash-hold window.)
+    // captive portal. A 5-10s hold is a refresh gesture and a 10-20s hold opens
+    // BLE maintenance (both classified on release; see power_boot_gesture).
+    // (Also runs the flash-hold window.)
     btn_gesture_t gesture = power_boot_gesture();
     bool ble_recovery = config_take_ble_recovery();
     if (gesture == BTN_GESTURE_MAINTENANCE ||

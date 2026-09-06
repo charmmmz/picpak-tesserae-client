@@ -90,13 +90,13 @@ btn_gesture_t power_boot_gesture(void) {
     if (!power_button_held()) return BTN_GESTURE_NONE;   // timer wake, or a tap already released
     // Button is held. The one-blink wake acknowledge already fired in app_main;
     // add the hold progression as screen-free feedback of how long it is held:
-    // off (<3 s) -> pulsing (BLE at 3 s) -> steady on (refresh at 5 s) -> burst (provisioning
-    // armed at 20 s).
-    ESP_LOGW(TAG, "button held at boot: flash window %d ms (refresh at %d ms, provisioning at %d ms)",
-             BOOT_HOLD_WINDOW_MS, BTN_REFRESH_HOLD_MS, PROVISION_HOLD_MS);
+    // off (<5 s) -> steady on (refresh at 5 s) -> pulsing (BLE at 10 s) -> burst
+    // (provisioning armed at 20 s).
+    ESP_LOGW(TAG, "button held at boot: flash window %d ms (refresh at %d ms, maintenance at %d ms, provisioning at %d ms)",
+             BOOT_HOLD_WINDOW_MS, BTN_REFRESH_HOLD_MS, BTN_MAINTENANCE_HOLD_MS, PROVISION_HOLD_MS);
     int waited = 0;
     int64_t started = esp_timer_get_time();
-    bool refresh_armed = false;
+    int last_log = 0;
     while (power_button_held()) {
         vTaskDelay(pdMS_TO_TICKS(200));
         waited = (int)((esp_timer_get_time() - started) / 1000);
@@ -107,15 +107,21 @@ btn_gesture_t power_boot_gesture(void) {
             ESP_LOGW(TAG, "held %d ms -> entering provisioning", waited);
             return BTN_GESTURE_PROVISION;
         }
-        if (!refresh_armed && waited >= BTN_REFRESH_HOLD_MS) {
-            refresh_armed = true;
-            led_set(true);   // steady on = refresh armed; keep holding to 20 s for setup
-        }
-        if (!refresh_armed && waited >= BTN_MAINTENANCE_HOLD_MS)
+        // LED cue painted by zone each tick: pulsing = release now for BLE
+        // maintenance (>=10 s); steady on = refresh armed (>=5 s); off below 5 s.
+        if (waited >= BTN_MAINTENANCE_HOLD_MS)
             led_set(((waited - BTN_MAINTENANCE_HOLD_MS) / 200) % 2 == 0); // release for BLE
-        if (waited >= BOOT_HOLD_WINDOW_MS && waited % 1000 == 0)
+        else if (waited >= BTN_REFRESH_HOLD_MS)
+            led_set(true);   // steady on = refresh armed; keep holding to 10 s for BLE
+        else
+            led_set(false);
+        // Periodic "still holding" heartbeat once past the flash window. waited is
+        // timer-derived and steps ~200 ms, so log on elapsed delta, not waited % 1000.
+        if (waited >= BOOT_HOLD_WINDOW_MS && waited - last_log >= 1000) {
+            last_log = waited;
             ESP_LOGW(TAG, "still holding (%d ms)... keep holding to %d for provisioning",
                      waited, PROVISION_HOLD_MS);
+        }
     }
     led_set(false);
     // Released before the provisioning threshold. A deliberate >= 5 s hold is a
@@ -123,7 +129,7 @@ btn_gesture_t power_boot_gesture(void) {
     // hits provisioning above and never trips a refresh on its way there.
     btn_gesture_t gesture = button_release_gesture((uint32_t)waited);
     if (gesture != BTN_GESTURE_TAP) return gesture;
-    // Held at boot but released before 3 s: a deliberate short press (tap). A
+    // Held at boot but released before 5 s: a deliberate short press (tap). A
     // human tap holds the pin low ~50-150 ms, long enough to have read as held
     // at boot, so electrical noise on GPIO2 (shared with the battery ADC) can't
     // fake it. Maps to a deck next-page nav in the REST loop.

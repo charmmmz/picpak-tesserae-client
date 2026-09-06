@@ -7,12 +7,15 @@
 #include "board.h"
 
 int main(int argc, char **argv) {
+    // Gesture map (classified on release): tap < 5 s, refresh 5-10 s,
+    // maintenance 10-20 s, provisioning >= 20 s. Maintenance sits above refresh
+    // so a deck-next tap or an over-held refresh can never fall into a BLE session.
     assert(button_release_gesture(0) == BTN_GESTURE_TAP);
-    assert(button_release_gesture(2999) == BTN_GESTURE_TAP);
-    assert(button_release_gesture(3000) == BTN_GESTURE_MAINTENANCE);
-    assert(button_release_gesture(4999) == BTN_GESTURE_MAINTENANCE);
+    assert(button_release_gesture(4999) == BTN_GESTURE_TAP);
     assert(button_release_gesture(5000) == BTN_GESTURE_REFRESH);
-    assert(button_release_gesture(19999) == BTN_GESTURE_REFRESH);
+    assert(button_release_gesture(9999) == BTN_GESTURE_REFRESH);
+    assert(button_release_gesture(10000) == BTN_GESTURE_MAINTENANCE);
+    assert(button_release_gesture(19999) == BTN_GESTURE_MAINTENANCE);
     assert(button_release_gesture(20000) == BTN_GESTURE_PROVISION);
     const char *names[] = {"5s", "10s", "native"};
     for (uint8_t i = 0; i < 3; i++) {
