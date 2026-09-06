@@ -143,15 +143,20 @@ time's name.
 > Windows). If you leave `<PORT>` in, the command fails.
 
 ```sh
-# backup, run it TWICE, into two files (replace <PORT> with your port)
-esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
-esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_2.bin
+# backup: two reads chained together, keeping the chip in the ROM loader so the
+# frame's firmware never boots between them (replace <PORT> with your port).
+# --after no_reset leaves the chip in the loader after the first read;
+# --before no_reset tells the second read not to reset it, so both reads see
+# the exact same, static flash.
+esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub --after no_reset read_flash 0x0 0x1000000 stock_backup_1.bin && \
+esptool.py --chip esp32c3 -p <PORT> -b 921600 --no-stub --before no_reset read_flash 0x0 0x1000000 stock_backup_2.bin
 ```
 
 **What a finished command looks like** (Mac, port `/dev/cu.usbmodem1101`, esptool installed via brew):
 
 ```sh
-esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 921600 --no-stub read_flash 0x0 0x1000000 stock_backup_1.bin
+esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 921600 --no-stub --after no_reset read_flash 0x0 0x1000000 stock_backup_1.bin && \
+esptool.py --chip esp32c3 -p /dev/cu.usbmodem1101 -b 921600 --no-stub --before no_reset read_flash 0x0 0x1000000 stock_backup_2.bin
 ```
 
 #### Verify: the two hashes must be identical
@@ -163,6 +168,19 @@ A raw `read_flash` has no error check, so two matching reads is the only proof t
 - **Windows (Command Prompt)**: `certutil -hashfile stock_backup_1.bin SHA256` (repeat for file 2)
 
 Only trust the backup once both hashes match.
+
+The `--after no_reset` / `--before no_reset` flags above are what make that possible. If esptool
+is allowed to reset the chip between the two reads (its default), the frame boots, wakes, and
+repaints — which rewrites its photo cache (the `framestore` partition) and can touch saved
+settings. Those changed bytes mean the two dumps would never match, even though the flash is fine.
+Keeping the chip in the ROM loader across both reads stops the firmware from running in between, so
+the bytes stay put.
+
+> **esptool v4 vs v5:** the underscore spelling above (`read_flash`, `no_reset`, `esptool.py`) works
+> on **both** v4 and v5. On v5 it just prints a harmless deprecation warning. v5's own native
+> spelling uses hyphens (`read-flash`, `--after no-reset`, and the `esptool` command without `.py`),
+> but that hyphen form does **not** work on v4, so the underscores shown here are the safe choice if
+> you're not sure which version you have.
 
 **Why 16 MB when the chip says 32?** The flash identifies itself as 32 MB, but full 32 MB
 dumps (taken twice on real hardware and compared) show the upper half reads back as a
