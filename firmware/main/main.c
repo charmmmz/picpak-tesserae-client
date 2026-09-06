@@ -7,6 +7,7 @@
 #include "power.h"
 #include "epd_driver.h"
 #include "wifi_manager.h"
+#include "ble_setup.h"
 #include "rest_handler.h"
 #include "mqtt_handler.h"
 #include "relay.h"
@@ -76,6 +77,23 @@ void app_main(void) {
     // captive portal. A shorter 5-20s hold is a refresh gesture (classified on
     // release; see power_boot_gesture). (Also runs the flash-hold window.)
     btn_gesture_t gesture = power_boot_gesture();
+    bool ble_recovery = config_take_ble_recovery();
+    if (gesture == BTN_GESTURE_MAINTENANCE ||
+        (ble_recovery && gesture != BTN_GESTURE_PROVISION)) {
+        // The button must be released before the shared GPIO2 battery ADC is read.
+        // Keep the normal low-voltage protection in front of radio/display load.
+        power_measure_battery();
+        if (is_power_fault_reset(reason) ||
+            lowbatt_gate(power_battery_mv(), false) != LOWBATT_NORMAL) {
+            splash_show_lowbatt();
+            power_deep_sleep(lowbatt_wake_s());
+        }
+        ble_setup_run(BLE_MAINTENANCE_TIMEOUT_S);
+        // Start the normal network cycle with clean Wi-Fi/BLE task ownership.
+        // Clear Wi-Fi requests persist a one-shot BLE recovery flag; timeout
+        // then falls back to the original AP setup if credentials are still absent.
+        esp_restart();
+    }
     bool want_provision = (gesture == BTN_GESTURE_PROVISION);
     bool want_refresh   = (gesture == BTN_GESTURE_REFRESH);
     bool want_next      = (gesture == BTN_GESTURE_TAP);   // short press -> deck next (REST)

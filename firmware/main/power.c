@@ -14,6 +14,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_sleep.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -89,15 +90,16 @@ btn_gesture_t power_boot_gesture(void) {
     if (!power_button_held()) return BTN_GESTURE_NONE;   // timer wake, or a tap already released
     // Button is held. The one-blink wake acknowledge already fired in app_main;
     // add the hold progression as screen-free feedback of how long it is held:
-    // off (<5 s) -> steady on (refresh armed at 5 s) -> rapid burst (provisioning
+    // off (<3 s) -> pulsing (BLE at 3 s) -> steady on (refresh at 5 s) -> burst (provisioning
     // armed at 20 s).
     ESP_LOGW(TAG, "button held at boot: flash window %d ms (refresh at %d ms, provisioning at %d ms)",
              BOOT_HOLD_WINDOW_MS, BTN_REFRESH_HOLD_MS, PROVISION_HOLD_MS);
     int waited = 0;
+    int64_t started = esp_timer_get_time();
     bool refresh_armed = false;
     while (power_button_held()) {
         vTaskDelay(pdMS_TO_TICKS(200));
-        waited += 200;
+        waited = (int)((esp_timer_get_time() - started) / 1000);
         if (waited >= PROVISION_HOLD_MS) {
             // Provisioning armed: rapid confirm burst so the user can release now.
             for (int i = 0; i < 6; i++) { led_set((i % 2) == 0); vTaskDelay(pdMS_TO_TICKS(60)); }
@@ -109,6 +111,8 @@ btn_gesture_t power_boot_gesture(void) {
             refresh_armed = true;
             led_set(true);   // steady on = refresh armed; keep holding to 20 s for setup
         }
+        if (!refresh_armed && waited >= BTN_MAINTENANCE_HOLD_MS)
+            led_set(((waited - BTN_MAINTENANCE_HOLD_MS) / 200) % 2 == 0); // release for BLE
         if (waited >= BOOT_HOLD_WINDOW_MS && waited % 1000 == 0)
             ESP_LOGW(TAG, "still holding (%d ms)... keep holding to %d for provisioning",
                      waited, PROVISION_HOLD_MS);
@@ -117,11 +121,9 @@ btn_gesture_t power_boot_gesture(void) {
     // Released before the provisioning threshold. A deliberate >= 5 s hold is a
     // refresh request. Classified here on RELEASE, so a continuous hold to 20 s
     // hits provisioning above and never trips a refresh on its way there.
-    if (waited >= BTN_REFRESH_HOLD_MS) {
-        ESP_LOGW(TAG, "held %d ms -> refresh request", waited);
-        return BTN_GESTURE_REFRESH;
-    }
-    // Held at boot but released before 5 s: a deliberate short press (tap). A
+    btn_gesture_t gesture = button_release_gesture((uint32_t)waited);
+    if (gesture != BTN_GESTURE_TAP) return gesture;
+    // Held at boot but released before 3 s: a deliberate short press (tap). A
     // human tap holds the pin low ~50-150 ms, long enough to have read as held
     // at boot, so electrical noise on GPIO2 (shared with the battery ADC) can't
     // fake it. Maps to a deck next-page nav in the REST loop.

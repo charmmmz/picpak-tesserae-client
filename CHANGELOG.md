@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Bluetooth maintenance from Tesserae Companion.** Hold the wake button for
+  about 3 seconds, then release before 5 seconds, to open a five-minute local
+  session with a QR code and six-digit passkey. Read diagnostics, repair Wi-Fi
+  while preserving REST/MQTT/relay configuration, restart, or clear settings
+  without requiring a reachable Tesserae server. The existing 5-second refresh
+  and 20-second AP setup gestures remain available.
+- **Refresh speed over Bluetooth.** Choose 5 s, 10 s, or Native in Companion.
+  The setting is shared with the AP portal, saved on the display, and takes
+  effect on the next refresh. Companion confirms a change only after it is saved.
+
 ## 0.9.3
 
 ### Added

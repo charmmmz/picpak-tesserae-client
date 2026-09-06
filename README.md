@@ -236,7 +236,7 @@ vendor's update/OTA tools stop recognizing the device until you restore stock, w
 WiFi + server come from an on-device **SoftAP captive portal** (`firmware/main/provisioning.c`), with no
 recompiling. It opens automatically when there are no usable creds at boot (empty NVS + empty
 `secrets.h`), or on demand via the ~20 s button hold below. The portal also lets you pick a
-**refresh speed** (5 s, 10 s (default), or the panel's native waveform), a trade-off between how
+**refresh speed** (5 s (default), 10 s, or the panel's native waveform), a trade-off between how
 fast the screen redraws and colour fidelity; the choice is saved and can be changed any time. The
 fast waveforms also get a small automatic temperature compensation (from the on-chip sensor); it
 needs no setup.
@@ -247,14 +247,18 @@ are **REST transport only**):
 - **Quick tap**: a plain press-and-release → wakes now and checks the server for a new photo. This
   is the "just show me the latest" press: nothing is navigated, and a directly-pushed image comes
   through as normal.
-- **Brief hold (~0.5 s, anything held under 5 s)** → flips to the **next page of the device's Deck**
+- **Brief hold (~0.5 s, anything held under 3 s)** → flips to the **next page of the device's Deck**
   in Tesserae (manual deck navigation; the wake sends `?button=right`). Needs a Deck bound to the
   device; with none it is a harmless no-op that behaves like a quick tap.
+- **Hold ~3 s, release before 5 s** → **Bluetooth maintenance** in Tesserae Companion.
+  Read diagnostics, repair Wi-Fi, or change refresh speed without a reachable server.
+  A QR code and passkey authorize a five-minute session. See [Bluetooth maintenance](docs/ble-maintenance.md).
 - **Hold ~5 s** → **force refresh**: the server re-renders the current page with fresh data and the
   frame repaints. This is also the deliberate override that resumes a battery-locked device.
 - **Hold ~20 s** → reopens the setup portal (deliberate re-provision of WiFi/server).
 - **Status LED** (`firmware/main/led.{c,h}`, GPIO21). Screen-free status: **one blink on every wake**
-  (timer or button); while holding the button the feedback steps off → **steady-on** past the ~5 s
+  (timer or button); while holding the button the feedback steps off → **pulsing** at ~3 s
+  for Bluetooth → **steady-on** past the ~5 s
   refresh point → **rapid burst** at the ~20 s provisioning point, so you can feel the timing without
   watching the panel. The console runs on USB-Serial-JTAG (`/dev/cu.usbmodem*`), so GPIO21, which is
   also the UART0 TX pin, carries no log traffic and is a clean, dedicated LED.
