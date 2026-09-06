@@ -51,8 +51,8 @@ bool maintenance_screen_render(uint8_t *fb, const char *payload, uint32_t passke
     char code[7];
     snprintf(code, sizeof code, "%06lu", (unsigned long)passkey);
     text(fb, 16, 180, code, 3);
-    text(fb, 16, 242, "Closes after 5 minutes", 1);
-    text(fb, 16, 264, "Wi-Fi is not required", 1);
+    text(fb, 16, 242, "Press button to exit", 1);
+    text(fb, 16, 264, "Closes after 5 minutes", 1);
     int n = qrcodegen_getSize(qr);
     int scale = 180 / (n + 8); // four-module quiet zone, within right column
     if (scale < 1) return false;

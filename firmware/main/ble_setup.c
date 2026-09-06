@@ -15,6 +15,7 @@
 #include "epd_driver.h"
 #include "maintenance_screen.h"
 #include "maintenance_settings.h"
+#include "maintenance_button.h"
 #include "ble_setup_protocol.h"
 #include "relay_crypto.h"
 #include "ble_wifi.h"
@@ -25,6 +26,7 @@
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -881,6 +883,7 @@ static void scrub_session(void)
 
 ble_setup_result_t ble_setup_run(uint32_t timeout_s)
 {
+    bool button_exit = false;
     s_result = BLE_SETUP_RESULT_TIMEOUT;
     s_stopping = false; s_notify = false; s_conn = BLE_HS_CONN_HANDLE_NONE;
     s_nimble_initialized = false; s_host_started = false;
@@ -918,15 +921,32 @@ ble_setup_result_t ble_setup_run(uint32_t timeout_s)
         s_result = BLE_SETUP_RESULT_ERROR;
         goto cleanup;
     }
-    EventBits_t bits = xEventGroupWaitBits(s_events, BIT_DONE, pdFALSE, pdTRUE,
-                                           pdMS_TO_TICKS(timeout_s * 1000u));
-    if (!(bits & BIT_DONE)) s_result = BLE_SETUP_RESULT_TIMEOUT;
+    // Battery measurement uses this same GPIO as an ADC input. The helper
+    // restores its digital input/pull-up before polling the physical button.
+    int64_t started = esp_timer_get_time();
+    int64_t deadline = started + (int64_t)timeout_s * 1000000;
+    maintenance_button_t button = maintenance_button_init(
+        power_button_held(), (uint32_t)(started / 1000));
+    while (esp_timer_get_time() < deadline) {
+        EventBits_t bits = xEventGroupWaitBits(s_events, BIT_DONE, pdFALSE, pdTRUE,
+                                               pdMS_TO_TICKS(20));
+        if (bits & BIT_DONE) break;
+        if (maintenance_button_poll(&button, power_button_held(),
+                                     (uint32_t)(esp_timer_get_time() / 1000))) {
+            ESP_LOGI(TAG, "button released; leaving BLE maintenance");
+            button_exit = true;
+            break;
+        }
+    }
 cleanup:
     stop_ble();
+    // The worker has stopped before assigning the local cancellation result.
+    // Already committed settings remain saved; pending commands are discarded.
+    if (button_exit) s_result = BLE_SETUP_RESULT_CANCELLED;
     ble_wifi_stop();
     scrub_session();
     if (s_result == BLE_SETUP_RESULT_TIMEOUT || s_result == BLE_SETUP_RESULT_ERROR ||
-        s_result == BLE_SETUP_RESULT_REBOOT) {
+        s_result == BLE_SETUP_RESULT_REBOOT || s_result == BLE_SETUP_RESULT_CANCELLED) {
         // Do not leave an expired QR on the screen if the server is offline.
         maintenance_screen_closed(framebuf());
         if (epd_init() == ESP_OK) { epd_display(framebuf()); epd_sleep(); }

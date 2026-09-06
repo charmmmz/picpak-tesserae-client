@@ -23,6 +23,14 @@ Closing the app disconnects the phone; the same physical session can be rejoined
 until that deadline. Deep sleep never advertises. Low-battery protection still
 applies to entry.
 
+To leave without a phone, briefly press and release the wake button after the
+QR screen is ready. The entry hold must first be released; a fresh press shorter
+than three seconds exits on release. Long holds have no action inside maintenance.
+The radio stops, the expired QR is cleared, and the display restarts its normal
+network cycle. Saved settings, including refresh speed, are retained; pending
+commands and staged but unsaved credentials are discarded. The five-minute
+deadline remains the fallback, even if a button is held or bouncing.
+
 Basic diagnostics and refresh-speed changes do not start Wi-Fi. Network scanning
 and repair are explicit actions. Wi-Fi repair tests association and DHCP, then
 saves only Wi-Fi credentials; it does not contact Tesserae or replace REST,
@@ -99,5 +107,6 @@ protocol golden vectors, QR framebuffer bounds, and existing pure firmware tests
 
 Before distributing: validate QR and passkey connections, reconnects, all three
 speed settings after power cycling, Wi-Fi failure with credentials preserved,
-low-battery entry, five-minute timeout and sleep current on a physical PicPak.
+low-battery entry, short-press exit (including while scanning or joining Wi-Fi),
+five-minute timeout and sleep current on a physical PicPak.
 Host and simulator tests do not establish those hardware results.

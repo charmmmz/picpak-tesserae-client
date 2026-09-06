@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Exit Bluetooth maintenance without a phone by briefly pressing and releasing
+  the wake button after the QR screen is ready. Saved settings are retained,
+  and the expired QR is cleared before normal operation resumes.
 - **Bluetooth maintenance from Tesserae Companion.** Hold the wake button for
   about 3 seconds, then release before 5 seconds, to open a five-minute local
   session with a QR code and six-digit passkey. Read diagnostics, repair Wi-Fi

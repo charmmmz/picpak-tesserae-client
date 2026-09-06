@@ -10,6 +10,7 @@ typedef enum {
     BLE_SETUP_RESULT_CLEAR_WIFI,
     BLE_SETUP_RESULT_FACTORY_RESET,
     BLE_SETUP_RESULT_ERROR,
+    BLE_SETUP_RESULT_CANCELLED,
 } ble_setup_result_t;
 
 /* Starts advertising, paints the QR/passkey screen, and serves one bounded
