@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "main.c"
          "ble_setup.c"
          "ble_setup_protocol.c"
+         "ble_photo.c"
          "ble_wifi.c"
          "maintenance_screen.c"
          "vendor/qrcodegen.c"

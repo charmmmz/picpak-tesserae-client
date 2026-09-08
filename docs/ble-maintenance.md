@@ -23,15 +23,17 @@ initial server setup.
 The display paints a QR code and passkey before advertising. Open Bluetooth
 Maintenance in Companion, select the nearby PicPak, then scan the QR code or use
 the six-digit passkey. The five-minute deadline starts after screen rendering.
-Closing the app disconnects the phone; the same physical session can be rejoined
-until that deadline. Deep sleep never advertises. Low-battery protection still
+Closing the sheet disconnects the phone. In Automatic mode, an unchanged
+maintenance session can be rejoined until its deadline. After changing Screen Mode,
+or after authenticated maintenance in Manual mode, disconnecting ends maintenance
+and applies the selected mode. Deep sleep never advertises. Low-battery protection still
 applies to entry.
 
 To leave without a phone, briefly press and release the wake button after the
 QR screen is ready. The entry hold must first be released; a fresh press shorter
 than three seconds exits on release. Long holds have no action inside maintenance.
 The radio stops, the expired QR is cleared, and the display restarts its normal
-network cycle. Saved settings, including refresh speed, are retained; pending
+operation (network cycle or button-only sleep). Saved settings, including refresh speed, are retained; pending
 commands and staged but unsaved credentials are discarded. The five-minute
 deadline remains the fallback, even if a button is held or bouncing.
 
@@ -40,7 +42,7 @@ and repair are explicit actions. Wi-Fi repair tests association and DHCP, then
 saves only Wi-Fi credentials; it does not contact Tesserae or replace REST,
 MQTT, relay, or server-registration settings. Clearing Wi-Fi opens one recovery
 session after restarting, then falls back to AP setup if it times out. Factory
-Reset clears stored application settings and returns to AP setup. Neither reset
+Reset clears stored application settings, including photo authorization, and returns to AP setup. Neither reset
 operation reflashes the firmware.
 
 The normal image deduplication references are cleared when painting the QR so
@@ -55,6 +57,21 @@ drivers or waveforms. They control redraw duration, not the schedule between
 updates. Faster modes trade colour margin for speed; Native uses the panel's
 built-in waveform. Approximate duration depends on the panel and conditions.
 Saving does not force an extra refresh; it applies at the next `epd_init()`.
+
+## Screen mode
+
+Updated Companion shows **Screen Mode** when diagnostics reports `screen_mode`.
+Choose **Automatic (Wi-Fi)** for normal server updates or **Manual (Bluetooth)**
+for button-triggered local photo reception. Manual mode works without a saved
+SSID or reachable server. Close Maintenance, wait for the closing screen to
+finish, then press the button once with Companion open to send a photo.
+
+The existing refresh waveform is used for photos. Hold for 10 seconds and release
+before 20 seconds to open maintenance; a 5-second hold in Manual mode also opens
+photo reception. Completing explicit 20-second AP provisioning returns the display
+to Automatic mode.
+See [BLE photo protocol and validation](ble-photo.md) for authorization, timing,
+compatibility, and the complete wire contract.
 
 ## Wire contract
 

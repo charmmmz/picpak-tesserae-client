@@ -39,6 +39,12 @@ bool config_get_ap_hint(uint8_t bssid[6], uint8_t *chan);
 void config_set_ap_hint(const uint8_t bssid[6], uint8_t chan);
 void config_clear_ap_hint(void);
 
+// Display source is independent of the REST/MQTT/relay transport.
+// A single committed blob stores mode + the 32-byte photo authorization key.
+bool config_screen_is_bluetooth(void);
+bool config_get_photo_key(uint8_t key[32]);
+esp_err_t config_save_screen_mode(bool bluetooth, const uint8_t key[32]);
+
 // --- portal write path ---
 void config_set_wifi(const char *ssid, const char *pass);   // blank/NULL pass keeps existing
 void config_set_server_url(const char *url);

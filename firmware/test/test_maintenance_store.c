@@ -59,6 +59,17 @@ esp_err_t nvs_get_u32(nvs_handle_t h, const char *k, uint32_t *v) { size_t n = s
 int main(void) {
     char ssid[33], pass[65], url[128], token[64];
     assert(config_init() == ESP_OK);
+    uint8_t photo_key[32], read_key[32]; memset(photo_key, 0x5a, sizeof photo_key);
+    assert(!config_screen_is_bluetooth());
+    assert(!config_get_photo_key(read_key));
+    assert(config_save_screen_mode(true, NULL) == ESP_ERR_INVALID_ARG);
+    fail_commit = 1;
+    assert(config_save_screen_mode(true, photo_key) == ESP_FAIL);
+    fail_commit = 0;
+    assert(config_save_screen_mode(true, photo_key) == ESP_OK);
+    assert(config_screen_is_bluetooth());
+    assert(config_get_photo_key(read_key) && !memcmp(photo_key, read_key, 32));
+
     config_set_server_url("http://example.test:8000");
     config_set_device_token("test-token");
     config_set_transport(0);
@@ -77,6 +88,8 @@ int main(void) {
     assert(config_save_waveform(0) == ESP_OK);
     assert(config_clear_wifi() == ESP_OK);
     assert(!config_get_wifi(ssid, sizeof ssid, pass, sizeof pass));
+    assert(config_screen_is_bluetooth()); // clearing Wi-Fi preserves manual mode
+    assert(config_get_photo_key(read_key) && !memcmp(photo_key, read_key, 32));
     assert(config_take_ble_recovery());
     assert(!config_take_ble_recovery());
     assert(config_get_waveform(2) == 0);
@@ -93,7 +106,11 @@ int main(void) {
     assert(config_get_wifi(ssid, sizeof ssid, pass, sizeof pass));
     assert(!strcmp(ssid, "portal-network"));
     assert(!config_take_ble_recovery());
+    assert(config_save_screen_mode(false, NULL) == ESP_OK);
+    assert(!config_screen_is_bluetooth() && !config_get_photo_key(read_key));
+    assert(config_save_screen_mode(true, photo_key) == ESP_OK);
     assert(config_factory_reset() == ESP_OK);
+    assert(!config_screen_is_bluetooth() && !config_get_photo_key(read_key));
     assert(!config_get_wifi(ssid, sizeof ssid, pass, sizeof pass));
     config_get_device_token(token, sizeof token); assert(!token[0]);
     assert(config_get_waveform(2) == 2);

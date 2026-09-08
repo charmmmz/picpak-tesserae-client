@@ -137,8 +137,8 @@ btn_gesture_t power_boot_gesture(void) {
     return BTN_GESTURE_TAP;
 }
 
-void power_deep_sleep(uint32_t seconds) {
-    if (seconds < SLEEP_INTERVAL_MIN_S) seconds = SLEEP_INTERVAL_MIN_S;
+static void enter_deep_sleep(uint32_t seconds) {
+    // Zero is the manual photo mode: GPIO wake only, no periodic radio work.
     if (seconds > SLEEP_INTERVAL_MAX_S) seconds = SLEEP_INTERVAL_MAX_S;
 
     // The wake button (GPIO2) is shared with the battery ADC. A battery read
@@ -153,7 +153,14 @@ void power_deep_sleep(uint32_t seconds) {
     }
 
     ESP_LOGI(TAG, "deep sleep %u s (button wake armed)", (unsigned)seconds);
-    esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    if (seconds) esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
     esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_BTN, ESP_GPIO_WAKEUP_GPIO_LOW);
     esp_deep_sleep_start();
+}
+
+void power_sleep_until_button(void) { enter_deep_sleep(0); }
+void power_deep_sleep(uint32_t seconds) {
+    if (seconds < SLEEP_INTERVAL_MIN_S) seconds = SLEEP_INTERVAL_MIN_S;
+    enter_deep_sleep(seconds);
 }

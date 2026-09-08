@@ -11,9 +11,13 @@ typedef enum {
     BLE_SETUP_RESULT_FACTORY_RESET,
     BLE_SETUP_RESULT_ERROR,
     BLE_SETUP_RESULT_CANCELLED,
+    BLE_SETUP_RESULT_PHOTO_RECEIVED,
 } ble_setup_result_t;
 
 /* Starts advertising, paints the QR/passkey screen, and serves one bounded
  * session. Wi-Fi changes are saved only after joining successfully; server
  * settings are preserved even when the server is unreachable. */
 ble_setup_result_t ble_setup_run(uint32_t timeout_s);
+
+// Photo sessions preserve the current picture until a complete verified upload.
+ble_setup_result_t ble_photo_run(uint32_t timeout_s);

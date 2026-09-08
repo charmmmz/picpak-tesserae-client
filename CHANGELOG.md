@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+- Bluetooth photo connections now report battery voltage, low-voltage status,
+  refresh speed and screen mode to Companion without starting Wi-Fi.
+- **Manual Bluetooth photo mode.** Choose Automatic (Wi-Fi) or Manual (Bluetooth)
+  in Companion's PicPak maintenance screen. Manual mode pauses scheduled network
+  updates and heartbeats, sleeps until a button press, and receives photos directly
+  from an authorized iPhone. Wi-Fi/server settings and refresh speed are retained.
+- Photo authorization is established through authenticated maintenance and stored
+  on the display. Returning to Automatic mode or performing Factory Reset revokes
+  photo authorization. Complete uploads are verified before refreshing; cancelled
+  or incomplete photo sessions leave the existing picture intact.
+
+### Fixed
+- Leaving Bluetooth maintenance in Manual mode now shows how to send a photo
+  with one button press, replacing the misleading "Bluetooth closed" Wi-Fi
+  message. A consistent text size, numbered steps and aligned spacing make
+  the guide easier to follow. The expired QR code is still cleared before sleeping.
+- Maintenance entry guidance follows the upstream 10-second hold in Manual
+  Bluetooth mode as well as Automatic mode.
+
 ## 0.9.4
 
 ### Added

@@ -219,6 +219,43 @@ uint8_t config_get_waveform(uint8_t fallback) {
     nvs_close(h);
     return v <= 2 ? v : fallback;
 }
+static bool read_photo_config(uint8_t value[33]) {
+    nvs_handle_t h;
+    if (nvs_open(NS_STATE, NVS_READONLY, &h) != ESP_OK) return false;
+    size_t len = 33;
+    esp_err_t err = nvs_get_blob(h, "photo_config", value, &len);
+    nvs_close(h);
+    return err == ESP_OK && len == 33 && value[0] == 1;
+}
+bool config_screen_is_bluetooth(void) {
+    uint8_t value[33] = {0};
+    bool result = read_photo_config(value);
+    memset(value, 0, sizeof value);
+    return result;
+}
+bool config_get_photo_key(uint8_t key[32]) {
+    uint8_t value[33] = {0};
+    bool result = read_photo_config(value);
+    if (result) memcpy(key, value + 1, 32);
+    memset(value, 0, sizeof value);
+    return result;
+}
+esp_err_t config_save_screen_mode(bool bluetooth, const uint8_t key[32]) {
+    if (bluetooth && !key) return ESP_ERR_INVALID_ARG;
+    uint8_t value[33] = {0};
+    value[0] = bluetooth ? 1 : 0;
+    if (bluetooth) memcpy(value + 1, key, 32);
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS_STATE, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, "photo_config", value, sizeof value);
+        if (err == ESP_OK) err = nvs_commit(h);
+        nvs_close(h);
+    }
+    memset(value, 0, sizeof value);
+    return err;
+}
+
 void config_set_paired_pending(bool pending) {
     nvs_handle_t h;
     if (nvs_open(NS_STATE, NVS_READWRITE, &h) != ESP_OK) return;

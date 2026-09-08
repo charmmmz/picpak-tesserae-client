@@ -35,6 +35,33 @@ void maintenance_screen_closed(uint8_t *fb) {
     text(fb, 24, 208, "next image when Wi-Fi returns.", 1);
 }
 
+static void photo_guide_step(uint8_t *fb, int y, const char *number, const char *label) {
+    // One text size and a fixed baseline for every step; the outline keeps
+    // the sequence distinct without adding another type scale or colour.
+    const int cx = 48, cy = y + 8;
+    for (int dy = -16; dy <= 16; dy++)
+        for (int dx = -16; dx <= 16; dx++) {
+            int distance = dx * dx + dy * dy;
+            if (distance >= 14 * 14 && distance <= 16 * 16)
+                pixel(fb, cx + dx, cy + dy);
+        }
+    text(fb, cx - 8, y, number, 2);
+    text(fb, 80, y, label, 2);
+}
+
+void maintenance_screen_photo_ready(uint8_t *fb) {
+    fb_fill(fb, 1);
+    text(fb, 32, 32, "Bluetooth photos", 2);
+    for (int x = 32; x < EPD_W - 32; x++) {
+        pixel(fb, x, 70);
+        pixel(fb, x, 246);
+    }
+    photo_guide_step(fb, 98, "1", "Open Tesserae");
+    photo_guide_step(fb, 148, "2", "Press button once");
+    photo_guide_step(fb, 198, "3", "Tap Send in app");
+    text(fb, 32, 266, "Hold 10 seconds for maintenance", 1);
+}
+
 bool maintenance_screen_render(uint8_t *fb, const char *payload, uint32_t passkey) {
     if (!fb || !payload || passkey > 999999) return false;
     uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(10)];

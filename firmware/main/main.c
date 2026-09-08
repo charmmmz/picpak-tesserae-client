@@ -87,6 +87,7 @@ void app_main(void) {
         if (is_power_fault_reset(reason) ||
             lowbatt_gate(power_battery_mv(), false) != LOWBATT_NORMAL) {
             splash_show_lowbatt();
+            if (config_screen_is_bluetooth()) power_sleep_until_button();
             power_deep_sleep(lowbatt_wake_s());
         }
         ble_setup_run(BLE_MAINTENANCE_TIMEOUT_S);
@@ -94,6 +95,17 @@ void app_main(void) {
         // Clear Wi-Fi requests persist a one-shot BLE recovery flag; timeout
         // then falls back to the original AP setup if credentials are still absent.
         esp_restart();
+    }
+    // Manual mode is decided before Wi-Fi credential / AP fallback handling.
+    if (config_screen_is_bluetooth() && gesture != BTN_GESTURE_PROVISION) {
+        bool button_wake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
+        if (button_wake || gesture == BTN_GESTURE_TAP || gesture == BTN_GESTURE_REFRESH) {
+            power_measure_battery();
+            if (!is_power_fault_reset(reason) &&
+                lowbatt_gate(power_battery_mv(), false) == LOWBATT_NORMAL)
+                ble_photo_run(90);
+        }
+        power_sleep_until_button();
     }
     bool want_provision = (gesture == BTN_GESTURE_PROVISION);
     bool want_refresh   = (gesture == BTN_GESTURE_REFRESH);
@@ -110,13 +122,16 @@ void app_main(void) {
     if (want_provision && gesture == BTN_GESTURE_PROVISION && lowbatt_locked()) {
         ESP_LOGW(TAG, "provision gesture ignored: battery locked, charge first");
         splash_show_lowbatt();
+        if (config_screen_is_bluetooth()) power_sleep_until_button();
         power_deep_sleep(lowbatt_wake_s());            // no return
     }
     if (want_provision) {
         splash_show_setup();                           // panel shows AP name/password while you provision
         if (provisioning_run_blocking(NULL) == ESP_OK) {
+            ESP_ERROR_CHECK(config_save_screen_mode(false, NULL));
             esp_restart();                             // saved -> re-enter normal path with new creds
         }
+        if (config_screen_is_bluetooth()) power_sleep_until_button();
         power_deep_sleep(SLEEP_INTERVAL_DEFAULT_S);   // timeout: sleep, retry portal next wake
     }
 

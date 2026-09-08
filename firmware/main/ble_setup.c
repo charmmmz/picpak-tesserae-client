@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "power.h"
+#include "lowbatt.h"
 #include "defaults.h"
 #include "config_store.h"
 #include "framebuf.h"
@@ -19,6 +20,9 @@
 #include "ble_setup_protocol.h"
 #include "relay_crypto.h"
 #include "ble_wifi.h"
+#include "ble_photo.h"
+#include "mbedtls/sha256.h"
+#include <math.h>
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
@@ -68,10 +72,17 @@ static const ble_uuid128_t s_qr_uuid      = TESSERAE_UUID(0x03);
 static const ble_uuid128_t s_secure_uuid  = TESSERAE_UUID(0x04);
 static const ble_uuid128_t s_event_uuid   = TESSERAE_UUID(0x05);
 
+static const ble_uuid128_t s_photo_uuid = TESSERAE_UUID(0x06);
+static const ble_uuid128_t s_photo_service_uuid = TESSERAE_UUID(0x07);
+static bool s_photo_session;
+static ble_photo_t s_photo;
+static _Atomic int64_t s_photo_activity;
+
 typedef enum { AUTH_QR = 1, AUTH_PASSKEY = 2 } auth_mode_t;
 
 typedef struct {
     auth_mode_t auth;
+    bool binary;
     uint32_t generation;
     size_t len;
     char json[BLE_SETUP_MESSAGE_MAX + 1];
@@ -84,7 +95,8 @@ typedef struct {
     bool ready;
 } staged_config_t;
 
-static ble_setup_result_t s_result;
+static _Atomic ble_setup_result_t s_result;
+static atomic_bool s_exit_on_disconnect;
 static EventGroupHandle_t s_events;
 static QueueHandle_t s_commands;
 static TaskHandle_t s_worker;
@@ -123,6 +135,7 @@ static uint8_t s_connection_nonce[BLE_SETUP_CONN_NONCE_LEN];
 static ble_setup_crypto_t s_crypto;
 static ble_setup_reassembly_t s_qr_reassembly;
 static ble_setup_reassembly_t s_native_reassembly;
+static ble_setup_reassembly_t s_photo_reassembly;
 static staged_config_t s_staged;
 static uint16_t s_out_message_id;
 static char s_info[320];
@@ -157,7 +170,7 @@ static bool prepare_connection(void)
                      (unsigned)BLE_SETUP_PROTOCOL_MAJOR, device_id, sid_hex,
                      nonce_hex, (unsigned)TESSERAE_BLE_HARDWARE_CODE,
                      TESSERAE_DEVICE_MODEL, FW_VERSION,
-                     "maintenance");
+                     s_photo_session ? "photo" : "maintenance");
     if (n <= 0 || (size_t)n >= sizeof s_info) return false;
 
     s_out_message_id = 0;
@@ -188,6 +201,12 @@ static void finish(ble_setup_result_t result)
         for (unsigned i = 0; i < 300 && atomic_load(&s_pending_events); i++) {
             if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_stopping) break;
             vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (result == BLE_SETUP_RESULT_PHOTO_RECEIVED &&
+            s_conn != BLE_HS_CONN_HANDLE_NONE) {
+            // notify_custom queues controller traffic. Allow the final receipt
+            // to leave the radio before stopping it for the panel refresh.
+            vTaskDelay(pdMS_TO_TICKS(300));
         }
     }
     s_result = result;
@@ -340,6 +359,7 @@ static void send_diagnostics(auth_mode_t auth)
     cJSON_AddBoolToObject(root, "server_configured", has_server);
     cJSON_AddStringToObject(root, "refresh_speed",
         refresh_speed_name(config_get_waveform(DEFAULT_WAVEFORM)));
+    cJSON_AddStringToObject(root, "screen_mode", config_screen_is_bluetooth() ? "bluetooth" : "wifi");
     cJSON_AddNumberToObject(root, "rssi", ble_wifi_rssi());
     if (has_wifi) cJSON_AddStringToObject(root, "ssid", ssid);
     else cJSON_AddNullToObject(root, "ssid");
@@ -469,9 +489,128 @@ static void set_refresh_speed(auth_mode_t auth, const cJSON *root)
     send_event(auth, event);
 }
 
+static bool json_u32(const cJSON *root, const char *name, uint32_t *out) {
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, name);
+    if (!cJSON_IsNumber(v) || !isfinite(v->valuedouble) || v->valuedouble < 0 ||
+        v->valuedouble > UINT32_MAX || floor(v->valuedouble) != v->valuedouble) return false;
+    *out = (uint32_t)v->valuedouble;
+    return true;
+}
+static void set_screen_mode(auth_mode_t auth, const cJSON *root) {
+    char value[16]; uint32_t request;
+    if (!copy_json_string(root, "value", value, sizeof value, true) ||
+        (strcmp(value, "wifi") && strcmp(value, "bluetooth")) ||
+        !json_u32(root, "request", &request)) {
+        send_simple(auth, "error", "Unsupported screen mode"); return;
+    }
+    bool bluetooth = !strcmp(value, "bluetooth");
+    uint8_t key[32] = {0}; char encoded[RELAY_B64_KEY_CAP] = {0};
+    if (bluetooth && !config_get_photo_key(key)) esp_fill_random(key, sizeof key);
+    if (bluetooth && !relay_b64url_encode(encoded, sizeof encoded, key, sizeof key)) {
+        memset(key, 0, sizeof key); send_simple(auth, "error", "Could not authorize phone"); return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = command_cancelled() ? ESP_FAIL : config_save_screen_mode(bluetooth, key);
+    xSemaphoreGive(s_lock);
+    memset(key, 0, sizeof key);
+    if (err != ESP_OK) { send_simple(auth, "error", "Could not save screen mode"); return; }
+    atomic_store(&s_exit_on_disconnect, true);
+    // Sent only on the physically enabled, authenticated maintenance channel.
+    char reply[192];
+    snprintf(reply, sizeof reply, "{\"event\":\"screen_mode\",\"value\":\"%s\","
+             "\"request\":%" PRIu32 ",\"photo_key\":\"%s\"}", value, request, encoded);
+    send_event(auth, reply);
+    memset(reply, 0, sizeof reply); memset(encoded, 0, sizeof encoded);
+}
+static void photo_ack(auth_mode_t auth) {
+    char reply[100];
+    snprintf(reply, sizeof reply, "{\"event\":\"photo_ack\",\"id\":%" PRIu32
+             ",\"offset\":%" PRIu32 "}", s_photo.id, s_photo.offset);
+    send_event(auth, reply);
+}
+static bool parse_digest(const char *hex, uint8_t digest[32]) {
+    if (!hex || strlen(hex) != 64) return false;
+    for (size_t i = 0; i < 32; i++) {
+        unsigned v = 0;
+        for (size_t j = 0; j < 2; j++) {
+            char c = hex[2*i+j];
+            unsigned n = c >= '0' && c <= '9' ? (unsigned)(c-'0') :
+                         c >= 'a' && c <= 'f' ? (unsigned)(c-'a'+10) : 16;
+            if (n > 15) return false;
+            v = (v << 4) | n;
+        }
+        digest[i] = (uint8_t)v;
+    }
+    return true;
+}
+static void photo_command(auth_mode_t auth, const char *op, const cJSON *root) {
+    if (auth != AUTH_QR) { send_simple(auth, "error", "Photo authorization required"); return; }
+    atomic_store(&s_photo_activity, esp_timer_get_time());
+    if (!strcmp(op, "photo_info")) {
+        // A snapshot from this wake, over the authenticated connection only.
+        // Reuse the cached pre-radio ADC reading; do not start Wi-Fi or resample
+        // while the radio loads the rail. Invalid readings are unknown, not 0 V.
+        int mv = power_battery_mv();
+        bool valid_battery = mv >= LOWBATT_MIN_PLAUSIBLE_MV && mv <= 5000;
+        char battery[80];
+        if (valid_battery)
+            snprintf(battery, sizeof battery, "\"battery_mv\":%d,\"low_battery\":%s",
+                     mv, mv < LOWBATT_ARM_MV ? "true" : "false");
+        else
+            snprintf(battery, sizeof battery, "\"battery_mv\":null,\"low_battery\":null");
+        char reply[320];
+        snprintf(reply, sizeof reply,
+                 "{\"event\":\"photo_info\",\"version\":1,\"width\":400,"
+                 "\"height\":300,\"bytes\":30000,\"chunk_bytes\":192,"
+                 "\"format\":\"picpak-bwry2-bottom-up\",%s,"
+                 "\"refresh_speed\":\"%s\",\"screen_mode\":\"%s\"}",
+                 battery, refresh_speed_name(config_get_waveform(DEFAULT_WAVEFORM)),
+                 config_screen_is_bluetooth() ? "bluetooth" : "wifi");
+        send_event(auth, reply);
+    } else if (!strcmp(op, "photo_begin")) {
+        uint32_t id, length; char hex[65], format[32]; uint8_t digest[32];
+        if (!json_u32(root, "id", &id) || !json_u32(root, "bytes", &length) ||
+            !copy_json_string(root, "sha256", hex, sizeof hex, true) || !parse_digest(hex, digest) ||
+            !copy_json_string(root, "format", format, sizeof format, true) ||
+            strcmp(format, "picpak-bwry2-bottom-up") ||
+            !ble_photo_begin(&s_photo, id, length, digest, s_command_generation)) {
+            send_simple(auth, "error", "Unsupported photo format or size"); return;
+        }
+        photo_ack(auth);
+    } else if (!strcmp(op, "photo_end")) {
+        uint32_t id; uint8_t digest[32];
+        if (!json_u32(root, "id", &id) || !ble_photo_complete(&s_photo, id, s_command_generation) ||
+            mbedtls_sha256(framebuf(), BLE_PHOTO_BYTES, digest, 0) != 0 ||
+            memcmp(digest, s_photo.digest, 32) != 0) {
+            send_simple(auth, "error", "Incomplete photo or checksum mismatch"); return;
+        }
+        if (command_cancelled()) return;
+        char reply[100];
+        snprintf(reply, sizeof reply, "{\"event\":\"photo_received\",\"id\":%" PRIu32 "}", id);
+        send_event(auth, reply);
+        finish(BLE_SETUP_RESULT_PHOTO_RECEIVED);
+    } else if (!strcmp(op, "photo_cancel")) {
+        memset(&s_photo, 0, sizeof s_photo);
+        send_simple(auth, "photo_cancelled", NULL);
+        finish(BLE_SETUP_RESULT_CANCELLED);
+    } else send_simple(auth, "error", "Operation unavailable in photo mode");
+}
+static void photo_data(const command_t *command) {
+    if (!s_photo_session || command->auth != AUTH_QR) {
+        send_simple(command->auth, "error", "Photo session required"); return;
+    }
+    if (!ble_photo_write(&s_photo, framebuf(), (const uint8_t *)command->json,
+                         command->len, s_command_generation)) {
+        send_simple(command->auth, "error", "Invalid photo chunk"); return;
+    }
+    atomic_store(&s_photo_activity, esp_timer_get_time());
+    photo_ack(command->auth);
+}
+
 static void process_command(const command_t *command)
 {
     if (command_cancelled()) return;
+    if (command->binary) { photo_data(command); return; }
     cJSON *root = cJSON_ParseWithLength(command->json, command->len);
     if (!root) { send_simple(command->auth, "error", "Invalid command JSON"); return; }
     const cJSON *op = cJSON_GetObjectItemCaseSensitive(root, "op");
@@ -480,8 +619,11 @@ static void process_command(const command_t *command)
         send_simple(command->auth, "error", "Missing operation");
         return;
     }
+    if (!s_photo_session && config_screen_is_bluetooth()) atomic_store(&s_exit_on_disconnect, true);
     ESP_LOGI(TAG, "command: %s", op->valuestring);
-    if (strcmp(op->valuestring, "scan") == 0) run_scan(command->auth);
+    if (s_photo_session) photo_command(command->auth, op->valuestring, root);
+    else if (strcmp(op->valuestring, "set_screen_mode") == 0) set_screen_mode(command->auth, root);
+    else if (strcmp(op->valuestring, "scan") == 0) run_scan(command->auth);
     else if (strcmp(op->valuestring, "stage") == 0) stage_config(command->auth, root);
     else if (strcmp(op->valuestring, "apply") == 0) apply_config(command->auth);
     else if (strcmp(op->valuestring, "diagnostics") == 0) send_diagnostics(command->auth);
@@ -534,7 +676,7 @@ static void worker_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static int accept_frame(auth_mode_t auth, struct os_mbuf *om)
+static int accept_frame(auth_mode_t auth, struct os_mbuf *om, bool binary)
 {
     size_t frame_len = OS_MBUF_PKTLEN(om);
     uint8_t frame[BLE_SETUP_MESSAGE_MAX + 32];
@@ -548,7 +690,7 @@ static int accept_frame(auth_mode_t auth, struct os_mbuf *om)
         if (!ble_setup_open(&s_crypto, BLE_SETUP_DIR_APP_TO_DEVICE,
                             frame, frame_len, plain, sizeof plain, &plain_len))
             return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-        reassembly = &s_qr_reassembly;
+        reassembly = binary ? &s_photo_reassembly : &s_qr_reassembly;
     } else {
         if (frame[0] != BLE_SETUP_FRAME_NATIVE || frame_len < 2)
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -564,7 +706,7 @@ static int accept_frame(auth_mode_t auth, struct os_mbuf *om)
     bool complete = ble_setup_reassembly_push(reassembly, &chunk, &valid);
     if (!valid) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     if (complete) {
-        command_t command = { .auth = auth, .generation = atomic_load(&s_generation), .len = reassembly->len };
+        command_t command = { .auth = auth, .binary = binary, .generation = atomic_load(&s_generation), .len = reassembly->len };
         memcpy(command.json, reassembly->bytes, reassembly->len + 1);
         ble_setup_reassembly_reset(reassembly);
         if (xQueueSend(s_commands, &command, 0) != pdTRUE)
@@ -591,19 +733,19 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         int rc = os_mbuf_append(ctxt->om, s_last_event, s_last_event_len);
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && which == 2) {
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && (which == 2 || which == 5)) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        int rc = accept_frame(AUTH_QR, ctxt->om);
+        int rc = accept_frame(AUTH_QR, ctxt->om, which == 5);
         xSemaphoreGive(s_lock);
         return rc;
     }
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && which == 3)
-        return accept_frame(AUTH_PASSKEY, ctxt->om);
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && which == 3 && !s_photo_session)
+        return accept_frame(AUTH_PASSKEY, ctxt->om, false);
     (void)conn_handle; (void)attr_handle;
     return BLE_ATT_ERR_UNLIKELY;
 }
 
-static const struct ble_gatt_svc_def s_services[] = {{
+static struct ble_gatt_svc_def s_services[] = {{
     .type = BLE_GATT_SVC_TYPE_PRIMARY,
     .uuid = &s_service_uuid.u,
     .characteristics = (struct ble_gatt_chr_def[]) {{
@@ -620,6 +762,9 @@ static const struct ble_gatt_svc_def s_services[] = {{
         .uuid = &s_event_uuid.u, .access_cb = gatt_access, .arg = (void *)4,
         .val_handle = &s_event_handle,
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+    }, {
+        .uuid = &s_photo_uuid.u, .access_cb = gatt_access, .arg = (void *)5,
+        .flags = BLE_GATT_CHR_F_WRITE,
     }, {0}}
 }, {0}};
 
@@ -629,9 +774,10 @@ static void advertise(void)
      * the 31-byte legacy advertisement without moving identity into the scan
      * response. See docs/ble-setup-protocol.md. */
     uint8_t service_data[26];
-    memcpy(service_data, s_service_uuid.value, 16);
+    const ble_uuid128_t *service = s_photo_session ? &s_photo_service_uuid : &s_service_uuid;
+    memcpy(service_data, service->value, 16);
     service_data[16] = BLE_SETUP_PROTOCOL_MAJOR;
-    service_data[17] = 0x02;
+    service_data[17] = s_photo_session ? 0x04 : 0x02;
     service_data[18] = TESSERAE_BLE_HARDWARE_CODE;
     uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_STA);
     memcpy(service_data + 19, mac + 3, 3);
@@ -650,7 +796,7 @@ static void advertise(void)
     char name[16];
     snprintf(name, sizeof name, "Tes-%02X%02X%02X", mac[3], mac[4], mac[5]);
     struct ble_hs_adv_fields response = {0};
-    response.uuids128 = &s_service_uuid;
+    response.uuids128 = service;
     response.num_uuids128 = 1;
     response.uuids128_is_complete = 1;
     response.name = (const uint8_t *)name;
@@ -662,6 +808,7 @@ static void advertise(void)
     struct ble_gap_adv_params params = {0};
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    if (s_photo_session) { params.itvl_min = 160; params.itvl_max = 240; } // 100-150 ms
     rc = ble_gap_adv_start(s_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event, NULL);
     if (rc != 0) ESP_LOGE(TAG, "advertise failed: %d", rc);
 }
@@ -733,7 +880,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ble_setup_reassembly_reset(&s_qr_reassembly);
         ble_setup_reassembly_reset(&s_native_reassembly);
         xSemaphoreGive(s_lock);
-        if (!s_stopping) advertise();
+        if (s_photo_session) {
+            if (s_result != BLE_SETUP_RESULT_PHOTO_RECEIVED) finish(BLE_SETUP_RESULT_CANCELLED);
+        } else if (atomic_load(&s_exit_on_disconnect)) {
+            finish(BLE_SETUP_RESULT_REBOOT);
+        } else if (!s_stopping) advertise();
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == s_event_handle)
@@ -753,7 +904,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static bool prepare_session(void)
 {
-    esp_fill_random(s_secret, sizeof s_secret);
+    if (s_photo_session) {
+        if (!config_get_photo_key(s_secret)) return false;
+    } else esp_fill_random(s_secret, sizeof s_secret);
     esp_fill_random(s_sid, sizeof s_sid);
     s_passkey = 100000u + esp_random() % 900000u;
     char key[RELAY_B64_KEY_CAP];
@@ -785,6 +938,7 @@ static bool start_ble(void)
     ble_hs_cfg.sm_sc = 1;
     ble_svc_gap_init();
     ble_svc_gatt_init();
+    s_services[0].uuid = s_photo_session ? &s_photo_service_uuid.u : &s_service_uuid.u;
     if (ble_gatts_count_cfg(s_services) != 0 || ble_gatts_add_svcs(s_services) != 0) {
         return false; // caller owns complete callout/controller cleanup
     }
@@ -881,8 +1035,13 @@ static void scrub_session(void)
     memset(s_logs, 0, sizeof s_logs);
 }
 
-ble_setup_result_t ble_setup_run(uint32_t timeout_s)
+static ble_setup_result_t run_session(uint32_t timeout_s, bool photo)
 {
+    s_photo_session = photo;
+    atomic_store(&s_exit_on_disconnect, false);
+    memset(&s_photo, 0, sizeof s_photo);
+    atomic_store(&s_photo_activity, 0);
+    ble_setup_reassembly_reset(&s_photo_reassembly);
     bool button_exit = false;
     s_result = BLE_SETUP_RESULT_TIMEOUT;
     s_stopping = false; s_notify = false; s_conn = BLE_HS_CONN_HANDLE_NONE;
@@ -903,18 +1062,20 @@ ble_setup_result_t ble_setup_run(uint32_t timeout_s)
         scrub_session();
         return BLE_SETUP_RESULT_ERROR;
     }
-    add_log("BLE maintenance started");
+    add_log(photo ? "BLE photo session started" : "BLE maintenance started");
 
     // Finish the panel refresh before advertising: the QR must match this session,
     // and display/radio peaks should not overlap on PicPak's marginal supply.
-    if (!maintenance_screen_render(framebuf(), s_qr_payload, s_passkey) ||
-        epd_init() != ESP_OK) {
-        scrub_session();
-        return BLE_SETUP_RESULT_ERROR;
+    if (!photo) {
+        if (!maintenance_screen_render(framebuf(), s_qr_payload, s_passkey) ||
+            epd_init() != ESP_OK) {
+            scrub_session();
+            return BLE_SETUP_RESULT_ERROR;
+        }
+        config_clear_frame_ref();
+        epd_display(framebuf());
+        epd_sleep();
     }
-    config_clear_frame_ref();
-    epd_display(framebuf());
-    epd_sleep();
 
     if (xTaskCreate(worker_task, "ble_setup_work", 7168, NULL, 5, &s_worker) != pdPASS ||
         !start_ble()) {
@@ -927,7 +1088,11 @@ ble_setup_result_t ble_setup_run(uint32_t timeout_s)
     int64_t deadline = started + (int64_t)timeout_s * 1000000;
     maintenance_button_t button = maintenance_button_init(
         power_button_held(), (uint32_t)(started / 1000));
-    while (esp_timer_get_time() < deadline) {
+    while (true) {
+        int64_t now = esp_timer_get_time();
+        int64_t activity = atomic_load(&s_photo_activity);
+        int64_t expires = photo && activity ? activity + 300000000LL : deadline;
+        if (now >= expires || (photo && now - started >= 600000000LL)) break;
         EventBits_t bits = xEventGroupWaitBits(s_events, BIT_DONE, pdFALSE, pdTRUE,
                                                pdMS_TO_TICKS(20));
         if (bits & BIT_DONE) break;
@@ -942,14 +1107,30 @@ cleanup:
     stop_ble();
     // The worker has stopped before assigning the local cancellation result.
     // Already committed settings remain saved; pending commands are discarded.
-    if (button_exit) s_result = BLE_SETUP_RESULT_CANCELLED;
+    if (button_exit && s_result != BLE_SETUP_RESULT_PHOTO_RECEIVED)
+        s_result = BLE_SETUP_RESULT_CANCELLED;
     ble_wifi_stop();
     scrub_session();
-    if (s_result == BLE_SETUP_RESULT_TIMEOUT || s_result == BLE_SETUP_RESULT_ERROR ||
-        s_result == BLE_SETUP_RESULT_REBOOT || s_result == BLE_SETUP_RESULT_CANCELLED) {
+    if (!photo && (s_result == BLE_SETUP_RESULT_TIMEOUT || s_result == BLE_SETUP_RESULT_ERROR ||
+        s_result == BLE_SETUP_RESULT_REBOOT || s_result == BLE_SETUP_RESULT_CANCELLED)) {
         // Do not leave an expired QR on the screen if the server is offline.
-        maintenance_screen_closed(framebuf());
+        // Closing diagnostics keeps the saved screen mode. In manual mode,
+        // explain how to wake photo reception instead of implying it was disabled.
+        if (config_screen_is_bluetooth()) maintenance_screen_photo_ready(framebuf());
+        else maintenance_screen_closed(framebuf());
         if (epd_init() == ESP_OK) { epd_display(framebuf()); epd_sleep(); }
     }
+    if (photo && s_result == BLE_SETUP_RESULT_PHOTO_RECEIVED) {
+        // Radio off before the high-current refresh. The receipt explicitly
+        // confirms verified reception, not successful physical refresh.
+        config_clear_frame_ref();
+        if (epd_init() == ESP_OK) { epd_display(framebuf()); epd_sleep(); }
+        else s_result = BLE_SETUP_RESULT_ERROR;
+    }
+    if (photo) memset(framebuf(), 0, BLE_PHOTO_BYTES);
+    memset(&s_photo, 0, sizeof s_photo);
+    ble_setup_reassembly_reset(&s_photo_reassembly);
     return s_result;
 }
+ble_setup_result_t ble_setup_run(uint32_t timeout_s) { return run_session(timeout_s, false); }
+ble_setup_result_t ble_photo_run(uint32_t timeout_s) { return run_session(timeout_s, true); }

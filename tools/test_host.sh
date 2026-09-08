@@ -11,7 +11,7 @@ for name in battpct epd_tempcomp lowbatt rest_button maintenance_button; do
         "firmware/test/test_$name.c" -lm -o "$BUILD/$name"
     "$BUILD/$name"
 done
-for name in fb2bpp provision_form mqtt_parse; do
+for name in fb2bpp provision_form mqtt_parse ble_photo; do
     cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
         "firmware/test/test_$name.c" "firmware/main/$name.c" -o "$BUILD/$name"
     "$BUILD/$name"

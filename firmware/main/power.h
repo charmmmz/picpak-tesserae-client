@@ -15,8 +15,9 @@ bool power_button_held(void);  // GPIO2 currently pressed (active-low)
 // Boot button-hold gesture, classified on RELEASE (see thresholds in defaults.h).
 // Run the boot-hold window: block while the button is held at boot (keeping USB
 // enumerated for re-flashing), then classify the gesture by how long it was held.
-// A held-to-20s returns PROVISION; released 5-20s returns REFRESH; released
-// 3-5s returns MAINTENANCE; shorter returns TAP; not held at boot returns NONE.
+// A held-to-20s returns PROVISION; released 10-20s returns MAINTENANCE; released
+// 5-10s returns REFRESH; shorter returns TAP; not held at boot returns NONE.
 btn_gesture_t power_boot_gesture(void);
 
+void power_sleep_until_button(void);
 void power_deep_sleep(uint32_t seconds);   // timer + button wake, then sleep (no return)
