@@ -10,8 +10,10 @@ is required to send a local photo.
 - Select Manual (Bluetooth) in authenticated Maintenance. Its acknowledgement
   also authorizes this iPhone. Close the sheet; the QR is replaced by a Bluetooth
   mode guide: open Tesserae, press the button once, then tap Send to choose a photo.
-  The display restarts into GPIO-only deep sleep. No Wi-Fi, timer heartbeat,
-  or periodic BLE advertisement runs in this mode.
+  The display restarts into deep sleep, woken by the button or a silent 24-hour
+  low-power battery check. No Wi-Fi, network heartbeat, or periodic BLE
+  advertisement runs in this mode; the 24-hour wake reads the cell and sleeps
+  again without bringing up any radio.
 - A short button wake opens a connectable photo advertisement. A tap released
   before the boot gesture reader runs still works via the GPIO wake cause.
 - No connection/authenticated command: 90 seconds. After an authenticated command:
@@ -33,6 +35,17 @@ is required to send a local photo.
 - Cancel, disconnect, missing chunks or checksum failure never refresh partial
   data. The photo session does not paint a QR, instructions, or a closing splash.
   Maintenance continues to paint its existing QR/closing screens.
+
+Low battery in Manual mode is self-signalling, since there is no server to paint a
+charge screen. When the cell reaches the low-battery gate (the same threshold and
+2-read debounce as the Wi-Fi path), the panel paints the "battery low — please
+charge" splash — on a button press or on the 24-hour check — and never brings up
+the BLE radio on a weak cell. It keeps re-checking every 24 hours; once the cell
+charges back above the recovery threshold it paints a "ready for photos" screen,
+clearing the charge splash so an untouched device recovers on its own. A brownout
+reset defers with a short recovery sleep instead of waiting button-only. Pressing
+the button after charging shows "ready" only once the cell has passed the recovery
+threshold; a marginally-charged cell stays on the charge splash.
 
 Manual mode intentionally stops automatic server content and telemetry. A server
 may show this display as stale/offline. To resume server-managed updates, select
@@ -126,8 +139,17 @@ UI journeys. Radio UI fixtures exercise the real manager and encoder but replace
 the physical peripheral; they do not establish BLE interoperability or power use.
 
 Before a hardware release verify on PicPak: QR and passkey authorization; switch
-modes/reboot; single short taps; no Wi-Fi or timer wakeups in Manual mode; a real
-photo's colors/row order/crop; 5s/10s/Native refresh; phone loss/cancel/checksum
-failure; recovery through Maintenance; low battery; and resuming every previously
-configured network transport. Actual throughput, power draw and panel behavior
-require a physical device.
+modes/reboot; single short taps; no Wi-Fi, network, or BLE-advertising wakeups in
+Manual mode (only the silent 24-hour battery poll); a real photo's colors/row
+order/crop; 5s/10s/Native refresh; phone loss/cancel/checksum failure; recovery
+through Maintenance; and resuming every previously configured network transport.
+For Manual-mode low battery specifically, verify on a drained cell: the charge
+splash paints on a button press and on the 24-hour check; the device re-checks and
+stays asleep while low; charging past the recovery threshold paints the "ready for
+photos" screen (on the 24-hour check or a button press); and a brownout reset
+defers with a short recovery sleep rather than stranding button-only. Each Manual
+wake logs `manual mode: battery <mV>, gate=<0 normal/1 arm/2 stay-low>,
+paint=<0 none/1 lowbatt/2 ready>, photo=<0/1>` just before the 24-hour sleep — read
+it in the serial monitor to confirm the gate verdict and what was painted (it
+prints after the USB-Serial-JTAG re-attach, so it survives a deep-sleep wake). Actual
+throughput, power draw and panel behavior require a physical device.

@@ -14,6 +14,9 @@
 #include "provisioning.h"
 #include "splash.h"
 #include "lowbatt.h"
+#include "manual_core.h"
+#include "maintenance_screen.h"
+#include "framebuf.h"
 #include "led.h"
 
 #include <time.h>
@@ -96,16 +99,41 @@ void app_main(void) {
         // then falls back to the original AP setup if credentials are still absent.
         esp_restart();
     }
-    // Manual mode is decided before Wi-Fi credential / AP fallback handling.
+    // Manual (Bluetooth) mode is decided before Wi-Fi credential / AP fallback handling.
+    // Unlike the Wi-Fi path there is no server to re-fetch content from, so the low-battery
+    // gate must give its own feedback: paint the charge splash when the cell goes low, and
+    // clear it to a "ready" screen once it recovers. Wakes are either a button press (a user
+    // is present -> advertise for a photo) or a 24 h low-power poll (battery re-check only, so
+    // an untouched device still learns it needs charging). A brownout is deferred first,
+    // before the gate runs, so a weak cell settles instead of stranding button-only forever.
     if (config_screen_is_bluetooth() && gesture != BTN_GESTURE_PROVISION) {
-        bool button_wake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
-        if (button_wake || gesture == BTN_GESTURE_TAP || gesture == BTN_GESTURE_REFRESH) {
-            power_measure_battery();
-            if (!is_power_fault_reset(reason) &&
-                lowbatt_gate(power_battery_mv(), false) == LOWBATT_NORMAL)
-                ble_photo_run(90);
+        if (is_power_fault_reset(reason)) {
+            ESP_LOGW(TAG, "manual mode: power-fault wake (reason=%d): deferring %d s",
+                     (int)reason, BROWNOUT_RECOVERY_SLEEP_S);
+            power_deep_sleep(BROWNOUT_RECOVERY_SLEEP_S);   // no return
         }
-        power_sleep_until_button();
+        bool user_wake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO ||
+                         gesture == BTN_GESTURE_TAP || gesture == BTN_GESTURE_REFRESH;
+        power_measure_battery();
+        bool was_locked = lowbatt_locked();               // read before the gate mutates state
+        lowbatt_action_t gate = lowbatt_gate(power_battery_mv(), false);
+        manual_decision_t act = manual_decide(user_wake, gate, was_locked);
+
+        if (act.paint == MANUAL_PAINT_LOWBATT) {
+            ESP_LOGW(TAG, "manual mode: battery low -> charge splash + %lu s poll",
+                     (unsigned long)lowbatt_wake_s());
+            splash_show_lowbatt();
+        } else if (act.paint == MANUAL_PAINT_READY) {
+            ESP_LOGI(TAG, "manual mode: battery recovered -> ready screen");
+            maintenance_screen_photo_ready(framebuf());
+            if (epd_init() == ESP_OK) { epd_display(framebuf()); epd_sleep(); }
+        }
+        if (act.run_photo) ble_photo_run(90);
+        // Diagnostic summary, printed after the session so it survives the USB-Serial-JTAG
+        // re-attach that swallows the early-boot battery log on a deep-sleep wake.
+        ESP_LOGI(TAG, "manual mode: battery %d mV, gate=%d, paint=%d, photo=%d",
+                 power_battery_mv(), (int)gate, (int)act.paint, (int)act.run_photo);
+        power_deep_sleep(lowbatt_wake_s());                // 24 h poll + button wake; no return
     }
     bool want_provision = (gesture == BTN_GESTURE_PROVISION);
     bool want_refresh   = (gesture == BTN_GESTURE_REFRESH);

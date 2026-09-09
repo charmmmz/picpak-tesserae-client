@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.5
+
 ### Added
 - Bluetooth photo connections now report battery voltage, low-voltage status,
   refresh speed and screen mode to Companion without starting Wi-Fi.
@@ -15,6 +17,15 @@
   or incomplete photo sessions leave the existing picture intact.
 
 ### Fixed
+- Manual (Bluetooth) mode now gives its own low-battery feedback and recovers on
+  its own. When the cell reaches the low-battery gate it paints the "battery low —
+  please charge" splash (on a button press or a silent 24-hour battery check) and
+  keeps the radio off; previously it slept button-only with no on-screen warning and
+  no scheduled re-check. It re-checks every 24 hours and, once charged past the
+  recovery threshold, paints the "Bluetooth photos" ready screen so an untouched
+  device recovers unattended. A brownout reset now defers with a short recovery
+  sleep instead of waiting only for a button. Diagnostic log line added
+  (`manual mode: battery … mV, gate=…`) for hardware verification.
 - Leaving Bluetooth maintenance in Manual mode now shows how to send a photo
   with one button press, replacing the misleading "Bluetooth closed" Wi-Fi
   message. A consistent text size, numbered steps and aligned spacing make
