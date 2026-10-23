@@ -1,4 +1,4 @@
-// PicPak BLE photo v1: authenticated, bounded, stop-and-wait transfers.
+// PicPak BLE photo v1: authenticated, bounded, optionally windowed transfers.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 #include <stdbool.h>
@@ -16,4 +16,7 @@ bool ble_photo_begin(ble_photo_t *state, uint32_t id, uint32_t length,
 // Duplicate chunks are acknowledged only when their contents match.
 bool ble_photo_write(ble_photo_t *state, uint8_t *buffer, const uint8_t *packet,
                      size_t length, uint32_t generation);
+// Valid future packet: discard its pixels and ACK the unchanged offset.
+bool ble_photo_is_gap(const ble_photo_t *state, const uint8_t *packet,
+                      size_t length, uint32_t generation);
 bool ble_photo_complete(const ble_photo_t *state, uint32_t id, uint32_t generation);

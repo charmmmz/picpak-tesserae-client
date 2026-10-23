@@ -96,11 +96,17 @@ Plain native events cannot be accepted by an app using the encrypted envelope.
 
 Control commands and events are JSON, at most 512 bytes, framed using BLE v2.
 The separate binary characteristic also uses v2 encrypted chunk framing around
-one binary packet. All writes use ATT Write With Response. Do not base64-encode
-an entire image into a control message.
+one binary packet. Control always uses ATT Write With Response. The optional
+`write_without_response:true` capability plus characteristic 0006's Write Without
+Response property enables ATT Write Commands for photo data. Older apps may keep
+using reliable writes. Do not base64-encode an entire image into a control message.
 
 1. `photo_info` -> `photo_info` event with version=1, width=400, height=300,
    bytes=30000, chunk_bytes=192, format=`picpak-bwry2-bottom-up`.
+   Optional `max_window:4` matches the four-command queue;
+   `write_without_response:true` opts into dynamic data sizing and the recovery
+   barrier below. The pixel format, 192-byte maximum, service ID and SHA-256 are
+   unchanged, so existing PicPak senders continue working.
    It also returns optional `battery_mv`, `low_battery`, `refresh_speed`
    (`5s`/`10s`/`native`) and `screen_mode` (`wifi`/`bluetooth`). Battery voltage
    is the cached reading taken on this wake before radio/display load, not a
@@ -115,11 +121,12 @@ an entire image into a control message.
    and a lowercase 64-character `sha256`. It starts/restarts the bounded buffer
    and returns `photo_ack` with matching `id` and `offset`=0.
 3. Binary messages contain `[id:4 big endian][offset:4 big endian][pixels:1..192]`.
-   `photo_ack` returns the next expected byte offset. Stop and wait for the ACK
-   before sending the next chunk. Duplicates succeed only if their bytes exactly
-   match already received data. Future offsets, overflow and other IDs/generations
-   are rejected. The phone retries a missing ACK at most twice after 8 seconds,
-   using fresh encrypted frames; it never replays ciphertext.
+   `photo_ack` returns the cumulative next expected byte offset. Without
+   `max_window`, stop and wait; otherwise keep at most the advertised number of
+   ordered logical packets outstanding. Duplicates succeed only if their bytes
+   exactly match already received data. A valid future offset is discarded and
+   ACKs the unchanged current offset; overflow, conflicting duplicates and wrong
+   IDs/generations are rejected. All retries use fresh encrypted frames.
 4. `photo_end` supplies the same `id`. All 30000 bytes and the SHA-256 must match.
    `photo_received` with that ID precedes radio shutdown and panel refresh.
 5. `photo_cancel` -> `photo_cancelled`, then shutdown. Closing/disconnecting also
@@ -128,6 +135,50 @@ an entire image into a control message.
 Pixels are row-major **bottom row first**; four pixels per byte, most significant
 bits first. Palette indices: 0 black, 1 white, 2 yellow, 3 red. Therefore B/W/Y/R
 packs to `0x1b`. This matches the existing PicPak driver and Tesserae renderer.
+
+### Connection-aware data and loss recovery
+
+For both write modes, choose `min(192, maximumWriteValueLength(.withoutResponse) - 33)`
+pixel bytes per packet. The 33 bytes cover photo/fragment headers and AES-GCM
+framing. Use the actual CoreBluetooth write limit and readiness callbacks each
+connection. If capacity is insufficient, use the existing reliable-write path.
+At MTU 256 PicPak still uses its compatible 192-byte maximum; lower capacities
+use smaller chunks. A maximum is not a fixed on-air packet size or a speed claim.
+
+A Write Command timeout stops refill and drains the phone's local write queue.
+Then send `{"op":"photo_status","id":123,"request":7}` with response. The shared worker
+queue places it after preceding binary data; its authenticated reply
+`{"event":"photo_status","id":123,"request":7,"offset":192}` is a drain barrier. Validate
+that the offset belongs to this transfer and an already sent packet boundary,
+discard prior in-flight state, and restart the bounded window there with fresh
+counters. Do not refill from interim normal ACKs while awaiting status. Status
+requires the active transfer ID and connection generation and never changes the
+buffer. Use a fresh nonzero UInt32 `request` for each barrier and accept only the
+matching reply, so a delayed status cannot restart a later window. Limit no-progress
+recovery to two attempts. Reliable-write clients retain
+the oldest-only retry after eight seconds and never replay a whole window.
+
+Photo notifications drain at most four frames per host callback. There is no
+fixed 15 ms delay per photo ACK; controller congestion backs off one scheduler
+tick with a 100 ms bound, and generation is rechecked before every enqueue.
+Maintenance retains its existing pacing. Photo sessions also request 15–30 ms
+connection intervals with zero peripheral latency and a 4-second timeout. The
+central may refuse without failing the transfer; logs show actual interval,
+latency, timeout and MTU. See [Apple QA1931](https://developer.apple.com/library/archive/qa/qa1931/)
+and [ESP-IDF's NimBLE connection example](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/ble/get-started/ble-connection.html).
+
+For hardware acceptance, compare the same 30000-byte image with old/new app and
+firmware combinations, recording transfer time separately from panel refresh,
+write mode, actual packet size/window, retries and serial link parameters. Test
+cancel/disconnect and command/ACK loss recovery. Host tests/builds do not measure
+PicPak radio throughput, power stability or physical refresh success.
+
+On 2026-10-23, the local throughput build (still reporting 0.9.10) was installed
+on one PicPak. Flash verification passed and its saved settings partition was
+unchanged byte for byte. The tester confirmed successful photo sending and a
+substantial perceived speed improvement. App build, negotiated transport, MTU,
+transfer timings and power measurements were not captured, so this is a hardware
+smoke test rather than a quantified throughput or battery result.
 
 ## Validation boundary
 
