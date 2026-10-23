@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- BLE photos advertise an optional four-packet window and Write Without Response
+  capability; compatible clients choose packet sizes from the current connection.
+  Existing PicPak v1 pixels, 192-byte receiver limit and reliable-write clients
+  remain supported.
+- Remove the fixed photo ACK delay, add bounded congestion handling and ordered
+  status recovery for missing commands, and log actual BLE connection parameters.
+  A PicPak hardware smoke test confirmed successful photo sending, with the
+  tester reporting a substantial speed improvement. Timed throughput and battery
+  measurements remain pending.
+
 ## 0.9.10
 
 ### Added

@@ -54,6 +54,7 @@ static const char *TAG = "ble_setup";
 #define BIT_HOST_STOPPED   BIT1
 #define BIT_WORKER_STOPPED BIT2
 #define COMMAND_QUEUE_LEN  4
+#define PHOTO_WINDOW_PACKETS COMMAND_QUEUE_LEN
 #define EVENT_FRAME_MAX    300
 #define LOG_ROWS           4
 #define TESSERAE_BLE_HARDWARE_CODE 11
@@ -120,6 +121,7 @@ static outgoing_event_t s_tx;
 static bool s_tx_active;
 static size_t s_tx_offset, s_tx_limit, s_tx_frame_len;
 static uint8_t s_tx_index, s_tx_count, s_tx_retries;
+static int64_t s_tx_retry_started;
 static uint16_t s_tx_message_id;
 static uint8_t s_tx_frame[EVENT_FRAME_MAX];
 static bool s_notify;
@@ -251,11 +253,16 @@ static void drop_tx(void)
 static void pump_tx(struct ble_npl_event *event)
 {
     (void)event;
+    /* Drain at most one photo window per host callback. Yield on controller
+     * congestion rather than adding 15 ms to every cumulative ACK. */
+    unsigned budget = s_photo_session ? PHOTO_WINDOW_PACKETS : 1;
+next_frame:
     if (s_stopping) return;
     if (!s_tx_active) {
         if (xQueueReceive(s_outgoing, &s_tx, 0) != pdTRUE) return;
         s_tx_active = true;
         s_tx_offset = s_tx_index = s_tx_frame_len = s_tx_retries = 0;
+        s_tx_retry_started = 0;
         s_tx_limit = event_payload_limit(s_tx.auth);
         s_tx_count = (uint8_t)((strlen(s_tx.json) + s_tx_limit - 1) / s_tx_limit);
         s_tx_message_id = ++s_out_message_id;
@@ -298,15 +305,30 @@ static void pump_tx(struct ble_npl_event *event)
             s_tx_frame_len = 0;
             s_tx_offset += part;
             s_tx_retries = 0;
+            s_tx_retry_started = 0;
             if (++s_tx_index == s_tx_count) drop_tx();
-        } else if (++s_tx_retries >= 30) {
-            ESP_LOGW(TAG, "notification delivery failed: %d", rc);
-            drop_tx();
+        } else {
+            if (!s_tx_retry_started) s_tx_retry_started = esp_timer_get_time();
+            bool exhausted = s_photo_session
+                ? esp_timer_get_time() - s_tx_retry_started >= 100000
+                : ++s_tx_retries >= 30;
+            if ((s_photo_session && rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) || exhausted) {
+                ESP_LOGW(TAG, "notification delivery failed: %d", rc);
+                drop_tx();
+            } else if (s_photo_session) {
+                /* No frame was enqueued; reseal after yielding with a fresh
+                 * counter. The active event remains generation-bound. */
+                s_tx_frame_len = 0;
+                budget = 1;
+            }
         }
     }
 schedule:
-    if (s_tx_active || uxQueueMessagesWaiting(s_outgoing))
-        ble_npl_callout_reset(&s_tx_callout, ble_npl_time_ms_to_ticks32(15));
+    if (s_tx_active || uxQueueMessagesWaiting(s_outgoing)) {
+        if (--budget) goto next_frame;
+        ble_npl_callout_reset(&s_tx_callout,
+            s_photo_session ? 1 : ble_npl_time_ms_to_ticks32(15));
+    }
 }
 
 static void send_event(auth_mode_t auth, const char *json)
@@ -320,7 +342,8 @@ static void send_event(auth_mode_t auth, const char *json)
         ESP_LOGW(TAG, "BLE event queue full");
         return;
     }
-    ble_npl_callout_reset(&s_tx_callout, ble_npl_time_ms_to_ticks32(15));
+    ble_npl_callout_reset(&s_tx_callout,
+        s_photo_session ? 1 : ble_npl_time_ms_to_ticks32(15));
 }
 
 static void send_simple(auth_mode_t auth, const char *event, const char *message)
@@ -562,9 +585,11 @@ static void photo_command(auth_mode_t auth, const char *op, const cJSON *root) {
         snprintf(reply, sizeof reply,
                  "{\"event\":\"photo_info\",\"version\":1,\"width\":400,"
                  "\"height\":300,\"bytes\":30000,\"chunk_bytes\":192,"
+                 "\"max_window\":%u,\"write_without_response\":true,"
                  "\"format\":\"picpak-bwry2-bottom-up\",%s,"
                  "\"refresh_speed\":\"%s\",\"screen_mode\":\"%s\"}",
-                 battery, refresh_speed_name(config_get_waveform(DEFAULT_WAVEFORM)),
+                 (unsigned)PHOTO_WINDOW_PACKETS, battery,
+                 refresh_speed_name(config_get_waveform(DEFAULT_WAVEFORM)),
                  config_screen_is_bluetooth() ? "bluetooth" : "wifi");
         send_event(auth, reply);
     } else if (!strcmp(op, "photo_begin")) {
@@ -577,6 +602,19 @@ static void photo_command(auth_mode_t auth, const char *op, const cJSON *root) {
             send_simple(auth, "error", "Unsupported photo format or size"); return;
         }
         photo_ack(auth);
+    } else if (!strcmp(op, "photo_status")) {
+        uint32_t id, request;
+        if (!json_u32(root, "id", &id) || !json_u32(root, "request", &request) ||
+            request == 0 || !s_photo.active || s_photo.id != id ||
+            s_photo.generation != s_command_generation) {
+            send_simple(auth, "error", "No matching photo transfer"); return;
+        }
+        /* The shared command queue places this behind all earlier data. */
+        char reply[100];
+        snprintf(reply, sizeof reply, "{\"event\":\"photo_status\",\"id\":%" PRIu32
+                 ",\"request\":%" PRIu32 ",\"offset\":%" PRIu32 "}",
+                 s_photo.id, request, s_photo.offset);
+        send_event(auth, reply);
     } else if (!strcmp(op, "photo_end")) {
         uint32_t id; uint8_t digest[32];
         if (!json_u32(root, "id", &id) || !ble_photo_complete(&s_photo, id, s_command_generation) ||
@@ -600,7 +638,9 @@ static void photo_data(const command_t *command) {
         send_simple(command->auth, "error", "Photo session required"); return;
     }
     if (!ble_photo_write(&s_photo, framebuf(), (const uint8_t *)command->json,
-                         command->len, s_command_generation)) {
+                         command->len, s_command_generation) &&
+        !ble_photo_is_gap(&s_photo, (const uint8_t *)command->json,
+                          command->len, s_command_generation)) {
         send_simple(command->auth, "error", "Invalid photo chunk"); return;
     }
     atomic_store(&s_photo_activity, esp_timer_get_time());
@@ -764,7 +804,7 @@ static struct ble_gatt_svc_def s_services[] = {{
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
     }, {
         .uuid = &s_photo_uuid.u, .access_cb = gatt_access, .arg = (void *)5,
-        .flags = BLE_GATT_CHR_F_WRITE,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
     }, {0}}
 }, {0}};
 
@@ -834,6 +874,31 @@ static void host_task(void *arg)
     vTaskSuspend(NULL);
 }
 
+static void log_photo_link(uint16_t conn)
+{
+    if (!s_photo_session) return;
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(conn, &desc) != 0) return;
+    ESP_LOGI(TAG, "photo link: interval=%u.%02u ms latency=%u timeout=%u ms mtu=%u",
+             (unsigned)(desc.conn_itvl * 5 / 4), (unsigned)((desc.conn_itvl * 25) % 100),
+             (unsigned)desc.conn_latency, (unsigned)desc.supervision_timeout * 10,
+             (unsigned)ble_att_mtu(conn));
+}
+
+static void request_photo_link(uint16_t conn)
+{
+    if (!s_photo_session) return;
+    /* 15–30 ms, zero peripheral latency, 4 s supervision timeout. This is a
+     * preference, not a throughput guarantee; the central may decline it. */
+    const struct ble_gap_upd_params params = {
+        .itvl_min = 12, .itvl_max = 24, .latency = 0,
+        .supervision_timeout = 400,
+    };
+    int rc = ble_gap_update_params(conn, &params);
+    if (rc != 0) ESP_LOGI(TAG, "photo connection preference not applied: %d", rc);
+    log_photo_link(conn);
+}
+
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -859,6 +924,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             ESP_LOGI(TAG,
                      "phone connected over BLE (handle=%u, host stack low-watermark=%u)",
                      s_conn, (unsigned)stack_after);
+            request_photo_link(s_conn);
         } else {
             ESP_LOGW(TAG, "BLE connection failed (status=%d)", event->connect.status);
             if (!s_stopping) advertise();
@@ -885,6 +951,16 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         } else if (atomic_load(&s_exit_on_disconnect)) {
             finish(BLE_SETUP_RESULT_REBOOT);
         } else if (!s_stopping) advertise();
+        return 0;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        if (s_photo_session) {
+            if (event->conn_update.status != 0)
+                ESP_LOGI(TAG, "photo connection update declined: %d", event->conn_update.status);
+            log_photo_link(event->conn_update.conn_handle);
+        }
+        return 0;
+    case BLE_GAP_EVENT_MTU:
+        log_photo_link(event->mtu.conn_handle);
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == s_event_handle)

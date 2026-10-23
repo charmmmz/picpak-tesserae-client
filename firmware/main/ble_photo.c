@@ -12,14 +12,24 @@ bool ble_photo_begin(ble_photo_t *s, uint32_t id, uint32_t length,
     memcpy(s->digest, digest, 32);
     return true;
 }
-bool ble_photo_write(ble_photo_t *s, uint8_t *buffer, const uint8_t *packet,
-                     size_t length, uint32_t generation) {
-    if (!s->active || s->generation != generation || length <= 8 ||
+static bool valid_packet(const ble_photo_t *s, const uint8_t *packet,
+                         size_t length, uint32_t generation) {
+    if (!s || !packet || !s->active || s->generation != generation || length <= 8 ||
         length > 8 + BLE_PHOTO_CHUNK_BYTES || read32(packet) != s->id) return false;
     uint32_t offset = read32(packet + 4);
     size_t count = length - 8;
-    if (offset > s->offset || offset > BLE_PHOTO_BYTES ||
-        count > BLE_PHOTO_BYTES - offset) return false;
+    return offset <= BLE_PHOTO_BYTES && count <= BLE_PHOTO_BYTES - offset;
+}
+bool ble_photo_is_gap(const ble_photo_t *s, const uint8_t *packet,
+                      size_t length, uint32_t generation) {
+    return valid_packet(s, packet, length, generation) && read32(packet + 4) > s->offset;
+}
+bool ble_photo_write(ble_photo_t *s, uint8_t *buffer, const uint8_t *packet,
+                     size_t length, uint32_t generation) {
+    if (!buffer || !valid_packet(s, packet, length, generation)) return false;
+    uint32_t offset = read32(packet + 4);
+    size_t count = length - 8;
+    if (offset > s->offset) return false;
     if (offset < s->offset)
         return count <= s->offset - offset && !memcmp(buffer + offset, packet + 8, count);
     memcpy(buffer + offset, packet + 8, count);
