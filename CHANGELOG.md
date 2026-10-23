@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.11
 
 - BLE photos advertise an optional four-packet window and Write Without Response
   capability; compatible clients choose packet sizes from the current connection.
