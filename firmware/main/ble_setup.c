@@ -57,7 +57,8 @@ static const char *TAG = "ble_setup";
 #define PHOTO_WINDOW_PACKETS COMMAND_QUEUE_LEN
 #define EVENT_FRAME_MAX    300
 #define LOG_ROWS           4
-#define TESSERAE_BLE_HARDWARE_CODE 11
+/* Registry-assigned PicPak code; 11 belongs to Seeed EE03. */
+#define TESSERAE_BLE_HARDWARE_CODE 20
 #define TESSERAE_DEVICE_MODEL "picpak_4_2"
 
 /* UUID text: 7a5e000N-7b6d-4f8b-9c2e-1d0a5a110001. NimBLE stores 128-bit
