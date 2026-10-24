@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.13
 
 - Bluetooth photo status and maintenance diagnostics include `battery_pct`,
   using the same cached voltage and discharge curve as the network heartbeat.
