@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.12
 
 - Use PicPak's assigned BLE hardware code 20 in setup/maintenance and photo
   advertisements and device info, avoiding the Seeed EE03 code 11 conflict.
