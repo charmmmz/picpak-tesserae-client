@@ -76,9 +76,13 @@ storage are separate outcomes: a Keychain failure is shown and can be retried.
 ## Discovery and security
 
 Photo service: `7A5E0007-7B6D-4F8B-9C2E-1D0A5A110001`.
-Its ten-byte service advertisement retains major **2**, hardware **11**, mode
+Its ten-byte service advertisement retains major **2**, hardware **20**, mode
 **0x04**, hardware suffix and random four-byte physical session ID. A distinct
 service prevents old apps from mistaking photo reception for setup/diagnostics.
+Earlier PicPak releases advertise code **11**, which collides with Seeed EE03.
+Current Companion requires code **20**, then checks the `picpak_4_2` model and
+exact advertised code in device info. Update both app and firmware; see
+[maintenance compatibility](ble-maintenance.md) for the upgrade requirement.
 
 Characteristics retain the info/control/event suffixes 0002/0003/0005. Binary
 photo data uses suffix **0006**. The passkey endpoint is unavailable in a photo

@@ -74,7 +74,14 @@ compatibility, and the complete wire contract.
 
 ## Wire contract
 
-- Protocol major: **2**; hardware code: **11**; model: **`picpak_4_2`**.
+- Protocol major: **2**; hardware code: **20**; model: **`picpak_4_2`**.
+  Code 20 is assigned to PicPak in the Tesserae hardware registry; 11 belongs
+  to Seeed EE03. Current Companion requires code 20 and does not recognise
+  earlier PicPak firmware advertising 11. Update both Companion and PicPak
+  firmware before using Bluetooth setup or photo sending. The model, device
+  ID, photo keys, stored configuration, protocol major, and wire format are
+  unchanged. Clients must preserve the advertised code when checking the
+  connected device-info identity.
 - Service UUID: `7A5E0001-7B6D-4F8B-9C2E-1D0A5A110001`.
 - Info / QR control / passkey control / events use UUID suffixes 0002–0005.
 - Advertisement is the existing v2 ten-byte service payload: version, mode
