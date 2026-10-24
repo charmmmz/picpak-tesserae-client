@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Use PicPak's assigned BLE hardware code 20 in setup/maintenance and photo
+  advertisements and device info, avoiding the Seeed EE03 code 11 conflict.
+  Update both firmware and Companion to versions using code 20. The model
+  remains `picpak_4_2`; device IDs and photo keys are unchanged.
+
 ## 0.9.11
 
 - BLE photos advertise an optional four-packet window and Write Without Response
